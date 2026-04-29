@@ -1,0 +1,44 @@
+# ── Python ────────────────────────────────────────────
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+*.coverage
+htmlcov/
+
+# ── Environment & Secrets ─────────────────────────────
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Database & Data ───────────────────────────────────
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Vector Store ──────────────────────────────────────
+chroma/
+
+# ── Node / Frontend ───────────────────────────────────
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+*.local
+
+# ── IDE ───────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ── Claude local config ───────────────────────────────
+CLAUDE.local.md
