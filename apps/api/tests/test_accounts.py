@@ -210,7 +210,7 @@ def test_create_duplicate_account_returns_409():
     response_lower = client.post("/api/accounts", json={"name": "icici", "type": "cash"})
     assert response_lower.status_code == 409
 
-    # Same name but different type — should succeed (ICICI cash vs ICICI bank are different accounts).
+    # Same name but different type — should succeed (ICICI cash vs ICICI bank are different).
     response_diff_type = client.post("/api/accounts", json={"name": "ICICI", "type": "bank"})
     assert response_diff_type.status_code == 201
 
