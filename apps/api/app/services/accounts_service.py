@@ -69,7 +69,7 @@ def create_account(db: Session, data: AccountCreate) -> Account:
             detail=(
                 f"An {status} account named '{existing.name}' of type '{existing.type}' "
                 f"already exists (id={existing.id}). "
-                f"{'Restore it via PATCH instead of creating a new one.' if existing.archived else 'Use PATCH to update it.'}"
+                f"{'Restore it via PATCH instead of creating a new one.' if existing.archived else 'Use PATCH to update it.'}"  # noqa: E501
             ),
         )
 
