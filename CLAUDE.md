@@ -35,7 +35,7 @@ personal-finance/
   apps/
     api/                    # FastAPI backend — the only active app right now
       app/
-        api/                # FastAPI routers — one file per resource
+        routers/            # FastAPI routers — one file per resource (e.g. accounts_router.py)
         db/
           session.py        # SQLAlchemy engine, session factory, get_db()
         services/           # business logic — pure functions, no FastAPI imports
@@ -104,6 +104,8 @@ Migrations (from `apps/api/`):
 **Auth:** Skipped in MVP. Google OAuth via Authlib + httpOnly session cookies added in PF-42.
 
 **No `user_id` columns** in MVP tables — added in the auth migration as a one-shot backfill.
+
+**No `user_id` columns or filters needed — ever.** The architecture is DB-per-user (decided in the design doc): each user gets their own SQLite file at `data/users/{user_id}.db`. The `get_user_db()` FastAPI dependency (PF-41) routes each request to the correct file. Because the database itself is the isolation boundary, `GET /api/accounts` (and every other list endpoint) simply returns all rows — they are already scoped to the right user by virtue of which file was opened. No `user_id` column, no WHERE filter, no risk of a forgotten filter leaking data across users.
 
 **No LangChain.** Use the Anthropic SDK directly. The agent loop is hand-rolled in `app/ai/agent.py` (~80 lines). LangGraph is re-evaluated only for the multi-agent Layer 5 feature.
 
