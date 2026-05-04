@@ -9,7 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api.health import router as health_router
+from app.routers.accounts_router import router as accounts_router
+from app.routers.health_router import router as health_router
 
 app = FastAPI(title="AI Personal Finance API", version="0.1.0")
 
@@ -93,3 +94,4 @@ async def validation_exception_handler(request, exc: RequestValidationError):
 # Routers
 # ---------------------------------------------------------------------------
 app.include_router(health_router)
+app.include_router(accounts_router)
