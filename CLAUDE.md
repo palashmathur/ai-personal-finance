@@ -13,7 +13,7 @@ If require suggest langgraph for AI agent workflow.
 
 **Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
 
-**Completed tickets:** PF-1 through PF-8b (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection).
+**Completed tickets:** PF-1 through PF-9, PF-11 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
 
 ---
 
