@@ -1,0 +1,812 @@
+{
+  "info": {
+    "name": "01 — Core APIs",
+    "description": "Runnable Postman collection for PF-8b covering all Group 1 endpoints:\nHealth, Accounts (CRUD + archive), Categories (tree + CRUD + edge cases),\nTransactions (CRUD + filters + transfer pairing).\n\nImport the environment file `env-local.json` alongside this collection\nand select the \"Local Dev\" environment before running.\n\nRequests are ordered to run top-to-bottom against a freshly-seeded DB.\nCollection variables ({{account_id}}, {{category_id}}, etc.) are set\nautomatically by the Tests scripts on each create request — so later\nrequests pick up the IDs without manual copy-pasting.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "account_id",         "value": "", "description": "Set by POST /api/accounts" },
+    { "key": "account_id_2",       "value": "", "description": "Set by second POST /api/accounts (needed for transfers)" },
+    { "key": "expense_category_id","value": "", "description": "Set by first category list call — Groceries (expense)" },
+    { "key": "income_category_id", "value": "", "description": "Set by first category list call — Salary (income)" },
+    { "key": "category_id_new",    "value": "", "description": "Set by POST /api/categories" },
+    { "key": "txn_id",             "value": "", "description": "Set by POST /api/transactions (expense)" },
+    { "key": "txn_transfer_id",    "value": "", "description": "Set by POST /api/transactions (transfer) — debit row id" }
+  ],
+  "item": [
+
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health — server is up and DB connected",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health",
+            "description": "Smoke test. Expect: {\"status\": \"ok\", \"db\": \"connected\"}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('db connected', () => {",
+                  "    const b = pm.response.json();",
+                  "    pm.expect(b.status).to.eql('ok');",
+                  "    pm.expect(b.db).to.eql('connected');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "Accounts",
+      "item": [
+        {
+          "name": "POST /api/accounts — create HDFC Savings",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/accounts",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"HDFC Savings\",\n  \"type\": \"bank\",\n  \"opening_balance_minor\": 1000000\n}"
+            },
+            "description": "Create the primary bank account. The Tests script saves the id as {{account_id}} for downstream requests."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set('account_id', b.id);",
+                  "pm.test('id saved', () => pm.expect(b.id).to.be.a('number'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/accounts — create Zerodha (broker, for transfers)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/accounts",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Zerodha\",\n  \"type\": \"broker\",\n  \"opening_balance_minor\": 0\n}"
+            },
+            "description": "Create a second account so we can test transfers between two accounts."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set('account_id_2', b.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/accounts — list active accounts",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/accounts",
+            "description": "Default list excludes archived accounts. Expect both accounts created above."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('at least 2 accounts', () => pm.expect(pm.response.json().length).to.be.at.least(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/accounts/:id — rename HDFC Savings",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/accounts/{{account_id}}",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"HDFC Savings (renamed)\"\n}"
+            },
+            "description": "Partial update — only the name changes. All other fields stay the same."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('name updated', () => pm.expect(pm.response.json().name).to.eql('HDFC Savings (renamed)'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/accounts/:id — archive account",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/accounts/{{account_id_2}}",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"archived\": true\n}"
+            },
+            "description": "Soft-delete: archived=true hides the account from the default list but keeps history."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('archived flag set', () => pm.expect(pm.response.json().archived).to.be.true);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/accounts — archived account absent from default list",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/accounts",
+            "description": "After archiving, account_id_2 should not appear here. It does appear with ?archived=true."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const ids = pm.response.json().map(a => a.id);",
+                  "pm.test('archived account absent', () => pm.expect(ids).to.not.include(pm.collectionVariables.get('account_id_2')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/accounts?archived=true — archived account visible",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/accounts?archived=true",
+              "query": [{ "key": "archived", "value": "true" }]
+            },
+            "description": "With archived=true, the full list including archived accounts is returned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const ids = pm.response.json().map(a => a.id);",
+                  "pm.test('archived account present', () => pm.expect(ids).to.include(pm.collectionVariables.get('account_id_2')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/accounts/:id — restore archived account",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/accounts/{{account_id_2}}",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"archived\": false\n}"
+            },
+            "description": "Restore account_id_2 so it can be used as a transfer destination in the Transactions section."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('no longer archived', () => pm.expect(pm.response.json().archived).to.be.false);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/accounts — duplicate name rejected (409)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/accounts",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"HDFC Savings (renamed)\",\n  \"type\": \"bank\"\n}"
+            },
+            "description": "Edge case: same name + type as an existing account. Expect 409 Conflict."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('code is conflict', () => pm.expect(pm.response.json().code).to.eql('conflict'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/accounts — invalid type rejected (422)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/accounts",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Bad Account\",\n  \"type\": \"savings\"\n}"
+            },
+            "description": "Edge case: type='savings' is not a valid enum value. Expect 422."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "Categories",
+      "item": [
+        {
+          "name": "GET /api/categories — nested tree with seeded data",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/categories",
+            "description": "Returns parents with their children embedded. Also extracts IDs for downstream requests."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const cats = pm.response.json();",
+                  "pm.test('has categories', () => pm.expect(cats.length).to.be.above(0));",
+                  "// Save a known expense child (Groceries) and income parent (Salary) for transactions tests",
+                  "const food = cats.find(c => c.name === 'Food');",
+                  "if (food && food.children.length > 0) {",
+                  "    const groceries = food.children.find(c => c.name === 'Groceries');",
+                  "    if (groceries) pm.collectionVariables.set('expense_category_id', groceries.id);",
+                  "}",
+                  "const salary = cats.find(c => c.name === 'Salary');",
+                  "if (salary) pm.collectionVariables.set('income_category_id', salary.id);",
+                  "pm.test('expense_category_id saved', () => pm.expect(pm.collectionVariables.get('expense_category_id')).to.not.be.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/categories?kind=income — filter by kind",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/categories?kind=income",
+              "query": [{ "key": "kind", "value": "income" }]
+            },
+            "description": "Only income categories returned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('all income', () => pm.response.json().forEach(c => pm.expect(c.kind).to.eql('income')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/categories — create parent category",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/categories",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Side Projects\",\n  \"kind\": \"income\",\n  \"color\": \"#6366f1\"\n}"
+            },
+            "description": "Create a new top-level income category."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.collectionVariables.set('category_id_new', b.id);",
+                  "pm.test('children empty', () => pm.expect(b.children).to.eql([]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/categories — create child under new parent",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/categories",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Consulting\",\n  \"kind\": \"income\",\n  \"parent_id\": {{category_id_new}}\n}"
+            },
+            "description": "Create a child under the parent created above."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('parent_id set', () => pm.expect(pm.response.json().parent_id).to.eql(pm.collectionVariables.get('category_id_new')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/categories — kind mismatch rejected (422)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/categories",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Bad Child\",\n  \"kind\": \"expense\",\n  \"parent_id\": {{category_id_new}}\n}"
+            },
+            "description": "Edge case: child kind (expense) doesn't match parent kind (income). Expect 422."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/categories/:id — rename category",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/categories/{{category_id_new}}",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Side Projects (updated)\"\n}"
+            },
+            "description": "Partial update — rename only."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('name updated', () => pm.expect(pm.response.json().name).to.eql('Side Projects (updated)'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/categories/:id — delete leaf (child)",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/api/categories/{{category_id_new}}",
+            "description": "Edge case: deleting a parent that has children should return 409. We test that next."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "// Parent still has a child (Consulting), so this should fail with 409",
+                  "pm.test('status 409 (has children)', () => pm.response.to.have.status(409));",
+                  "pm.test('code is conflict', () => pm.expect(pm.response.json().code).to.eql('conflict'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "POST /api/transactions — add income (salary)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/transactions",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"income\",\n  \"account_id\": {{account_id}},\n  \"category_id\": {{income_category_id}},\n  \"amount_minor\": 8500000,\n  \"occurred_on\": \"2026-05-01\",\n  \"note\": \"May salary\"\n}"
+            },
+            "description": "Create an income transaction. amount_minor=8500000 = ₹85,000 in paise."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const rows = pm.response.json();",
+                  "pm.test('returns list of 1', () => pm.expect(rows.length).to.eql(1));",
+                  "pm.test('kind is income', () => pm.expect(rows[0].kind).to.eql('income'));",
+                  "pm.test('account_name present', () => pm.expect(rows[0].account_name).to.be.a('string'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/transactions — add expense (groceries)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/transactions",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"expense\",\n  \"account_id\": {{account_id}},\n  \"category_id\": {{expense_category_id}},\n  \"amount_minor\": 85000,\n  \"occurred_on\": \"2026-05-05\",\n  \"note\": \"DMart weekly groceries\"\n}"
+            },
+            "description": "Create an expense. Saves the id as {{txn_id}} for PATCH/DELETE tests."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const rows = pm.response.json();",
+                  "pm.collectionVariables.set('txn_id', rows[0].id);",
+                  "pm.test('kind is expense', () => pm.expect(rows[0].kind).to.eql('expense'));",
+                  "pm.test('category_name present', () => pm.expect(rows[0].category_name).to.eql('Groceries'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/transactions — add transfer between accounts",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/transactions",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"transfer\",\n  \"from_account_id\": {{account_id}},\n  \"to_account_id\": {{account_id_2}},\n  \"amount_minor\": 500000,\n  \"occurred_on\": \"2026-05-06\",\n  \"note\": \"Moving to Zerodha for investment\"\n}"
+            },
+            "description": "Transfer creates TWO rows linked by a shared #transfer:{uuid} tag in the note field. Saves the debit row id as {{txn_transfer_id}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 201', () => pm.response.to.have.status(201));",
+                  "const rows = pm.response.json();",
+                  "pm.test('returns list of 2 rows', () => pm.expect(rows.length).to.eql(2));",
+                  "pm.collectionVariables.set('txn_transfer_id', rows[0].id);",
+                  "pm.test('debit row is expense', () => pm.expect(rows[0].kind).to.eql('expense'));",
+                  "pm.test('credit row is income', () => pm.expect(rows[1].kind).to.eql('income'));",
+                  "// Both rows must share the same #transfer:{uuid} tag",
+                  "const tag0 = (rows[0].note || '').match(/#transfer:[a-f0-9-]+/);",
+                  "const tag1 = (rows[1].note || '').match(/#transfer:[a-f0-9-]+/);",
+                  "pm.test('both rows share transfer uuid', () => {",
+                  "    pm.expect(tag0).to.not.be.null;",
+                  "    pm.expect(tag0[0]).to.eql(tag1[0]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/transactions — list all",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/transactions",
+            "description": "Returns all transactions ordered by occurred_on DESC. Should include income, expense, and both transfer halves (4 rows total)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('at least 4 rows', () => pm.expect(pm.response.json().length).to.be.at.least(4));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/transactions?kind=expense — filter by kind",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/transactions?kind=expense",
+              "query": [{ "key": "kind", "value": "expense" }]
+            },
+            "description": "Only expense rows returned (includes the transfer debit half, which is stored as kind=expense)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('all expense', () => pm.response.json().forEach(t => pm.expect(t.kind).to.eql('expense')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/transactions?from=2026-05-05&to=2026-05-06 — date range filter",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/transactions?from=2026-05-05&to=2026-05-06",
+              "query": [
+                { "key": "from", "value": "2026-05-05" },
+                { "key": "to",   "value": "2026-05-06" }
+              ]
+            },
+            "description": "Only transactions with occurred_on between May 5 and May 6 (inclusive)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('all in range', () => {",
+                  "    pm.response.json().forEach(t => {",
+                  "        pm.expect(t.occurred_on >= '2026-05-05' && t.occurred_on <= '2026-05-06').to.be.true;",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/transactions?account_id= — filter by account",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/transactions?account_id={{account_id}}",
+              "query": [{ "key": "account_id", "value": "{{account_id}}" }]
+            },
+            "description": "Only transactions on the primary account."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const aid = pm.collectionVariables.get('account_id');",
+                  "pm.test('all on account', () => pm.response.json().forEach(t => pm.expect(String(t.account_id)).to.eql(String(aid))));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/transactions?q=DMart — note search",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/transactions?q=DMart",
+              "query": [{ "key": "q", "value": "DMart" }]
+            },
+            "description": "Case-insensitive substring search on the note field."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('note contains DMart', () => {",
+                  "    pm.response.json().forEach(t => pm.expect(t.note.toLowerCase()).to.include('dmart'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/transactions?limit=2&offset=0 — pagination",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/transactions?limit=2&offset=0",
+              "query": [
+                { "key": "limit",  "value": "2" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "First page of 2 results."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('at most 2 rows', () => pm.expect(pm.response.json().length).to.be.at.most(2));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/transactions/:id — update amount and note",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/transactions/{{txn_id}}",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount_minor\": 92000,\n  \"note\": \"DMart groceries + extra snacks\"\n}"
+            },
+            "description": "Partial update on the expense transaction. Returns a list of 1 item."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json();",
+                  "pm.test('amount updated', () => pm.expect(rows[0].amount_minor).to.eql(92000));",
+                  "pm.test('note updated', () => pm.expect(rows[0].note).to.include('extra snacks'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH /api/transactions/:id — update transfer amount (both halves)",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/api/transactions/{{txn_transfer_id}}",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount_minor\": 600000\n}"
+            },
+            "description": "Patching one half of a transfer propagates amount to both rows. Returns list of 2 items."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json();",
+                  "pm.test('returns both halves', () => pm.expect(rows.length).to.eql(2));",
+                  "pm.test('both rows updated', () => rows.forEach(r => pm.expect(r.amount_minor).to.eql(600000)));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /api/transactions — kind+category mismatch rejected (422)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/api/transactions",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"kind\": \"income\",\n  \"account_id\": {{account_id}},\n  \"category_id\": {{expense_category_id}},\n  \"amount_minor\": 50000,\n  \"occurred_on\": \"2026-05-07\"\n}"
+            },
+            "description": "Edge case: income transaction with an expense category. Expect 422 kind mismatch."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('mismatch in detail', () => pm.expect(pm.response.json().detail.toLowerCase()).to.include('mismatch'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "DELETE /api/transactions/:id — delete transfer (both halves removed)",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/api/transactions/{{txn_transfer_id}}",
+            "description": "Deleting one half of a transfer deletes both rows atomically. Verify with a subsequent GET."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /api/transactions — verify transfer rows are gone",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/api/transactions",
+            "description": "After deleting the transfer, neither the debit nor credit row should appear."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status 200', () => pm.response.to.have.status(200));",
+                  "const ids = pm.response.json().map(t => t.id);",
+                  "const transferId = pm.collectionVariables.get('txn_transfer_id');",
+                  "pm.test('debit row gone', () => pm.expect(ids).to.not.include(transferId));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+
+  ]
+}
