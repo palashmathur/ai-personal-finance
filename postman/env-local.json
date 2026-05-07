@@ -1,0 +1,13 @@
+{
+  "id": "local-dev-env",
+  "name": "Local Dev",
+  "values": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "enabled": true,
+      "description": "Base URL for the local FastAPI server started with `make api`."
+    }
+  ],
+  "_postman_variable_scope": "environment"
+}
