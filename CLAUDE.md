@@ -13,7 +13,7 @@ If require suggest langgraph for AI agent workflow.
 
 **Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
 
-**Completed tickets:** PF-1 through PF-8 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD).
+**Completed tickets:** PF-1 through PF-8b (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection).
 
 ---
 
@@ -161,6 +161,7 @@ Migrations (from `apps/api/`):
 
 - **pytest** — unit and integration tests for services, pure functions, routers.
 - **Postman** — manual API verification; collections exported to `postman/` and committed.
+- Postman collection format: Postman Collection v2.1. Environment file `postman/env-local.json` sets `{{base_url}}=http://localhost:8000`. Collection variables (IDs) are chained automatically via Tests scripts — no manual copy-pasting needed between requests.
 - Use `TestClient` from `fastapi.testclient` for synchronous route tests (no async needed).
 - Test files live in `apps/api/tests/`, named `test_<resource>.py`.
 - Every new router gets its own test file in the same PR.
