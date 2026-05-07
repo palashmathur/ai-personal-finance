@@ -13,6 +13,8 @@ If require suggest langgraph for AI agent workflow.
 
 **Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
 
+**Completed tickets:** PF-1 through PF-8 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD).
+
 ---
 
 ## Stack
@@ -89,11 +91,13 @@ Migrations (from `apps/api/`):
 ## Git workflow
 
 - **One branch per ticket:** `palash/PF-<n>/<task-kebab>` — always created from `main`.
+- **Create the branch FIRST** — before writing a single file. Branch creation is always step 1 of implementation.
 - **Always pull main** before branching for a new ticket.
 - **Never commit without the user reviewing first** — implement, then stop. The user commits.
 - **Exception:** user explicitly asks to commit — then do it.
 - Commit messages: `PF-<n>: <short description>` — no Co-Authored-By lines, no Claude references.
 - After implementation, push and open a PR with a short human description (2–4 sentences, no filler).
+- **After every ticket:** update CLAUDE.md if any new decisions, patterns, or gotchas were discovered during implementation.
 
 ---
 
@@ -129,7 +133,13 @@ Migrations (from `apps/api/`):
 
 **Pydantic v2:** Use `model_validator`, `field_validator`, `model_config = ConfigDict(...)`. The v1 `@validator` decorator is deprecated.
 
+**Pydantic `model_validator` cross-field errors do not reliably produce 422s** in this FastAPI/Python 3.9 version combination — they surface as 500s instead. Always do cross-field validation in the service layer by raising `HTTPException(status_code=422, detail="...")` directly. This is reliably caught by the global exception handler.
+
 **SQLAlchemy 2.0:** Use `Mapped[type]` + `mapped_column()` syntax. Never use the old `Column(...)` style.
+
+**Python 3.9 compatibility:** Do not use `X | Y` union syntax for type hints (e.g. `str | None`). Use `Optional[X]` from `typing` instead. The `|` union syntax requires Python 3.10+.
+
+**`TestClient` and server exceptions:** Use `TestClient(app, raise_server_exceptions=False)` in test files so that server-side errors (4xx, 5xx) are returned as response objects rather than re-raised as Python exceptions in the test process.
 
 ---
 
