@@ -24,7 +24,7 @@ from sqlalchemy import (
     Text,
     func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -308,6 +308,11 @@ class InvestmentTxn(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+    # Eagerly-loaded relationship to the instrument catalog.
+    # This lets FastAPI's response serializer read txn.instrument directly
+    # without a separate query — Pydantic's from_attributes=True picks it up automatically.
+    instrument: Mapped["Instrument"] = relationship("Instrument", lazy="joined")
 
 
 class Settings(Base):

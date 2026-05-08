@@ -13,7 +13,7 @@ If require suggest langgraph for AI agent workflow.
 
 **Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
 
-**Completed tickets:** PF-1 through PF-9, PF-11 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
+**Completed tickets:** PF-1 through PF-9, PF-11, PF-12 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
 
 ---
 
@@ -140,6 +140,12 @@ Migrations (from `apps/api/`):
 **Python 3.9 compatibility:** Do not use `X | Y` union syntax for type hints (e.g. `str | None`). Use `Optional[X]` from `typing` instead. The `|` union syntax requires Python 3.10+.
 
 **`TestClient` and server exceptions:** Use `TestClient(app, raise_server_exceptions=False)` in test files so that server-side errors (4xx, 5xx) are returned as response objects rather than re-raised as Python exceptions in the test process.
+
+**SQLAlchemy `relationship` for nested responses:** When a response schema embeds a nested object (e.g. `InvestmentTxnResponse` embeds `InstrumentSummary`), add a SQLAlchemy `relationship(..., lazy="joined")` on the ORM model. FastAPI's response serializer reads the attribute via `from_attributes=True` — without the relationship the field is missing and a 500 is returned at serialization time.
+
+**Investment account types:** `broker`, `wallet`, `bank`, and `cash` are all valid for investment trades. `credit_card` is the only excluded type. Bank/cash are allowed because SIP debits come directly from a bank account without a separate broker. The check lives in `_get_investment_account_or_error` in the investment_txns service.
+
+**Bootstrap price on first trade:** When `instrument.current_price_minor IS NULL`, the first trade sets it to `price_minor`. This is done in the service before `commit()` so both the trade INSERT and the instrument UPDATE land in the same DB transaction. Subsequent trades never overwrite an existing price.
 
 ---
 

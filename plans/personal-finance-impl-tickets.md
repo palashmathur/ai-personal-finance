@@ -134,7 +134,7 @@ PF-10 through PF-18
 #### PF-12 — Investment txns CRUD
 **Goal:** Per-trade ledger endpoints.
 **AC:**
-- `POST /api/investment-txns` validates: `account.type ∈ {broker, wallet}`, `quantity > 0`, `price_minor ≥ 0`, `side ∈ {buy, sell, dividend}`.
+- `POST /api/investment-txns` validates: `account.type ∈ {broker, wallet, bank, cash}` (bank/cash allowed because SIP debits come directly from a bank account; `credit_card` is the only excluded type), `quantity > 0`, `price_minor ≥ 0`, `side ∈ {buy, sell, dividend}`.
 - Side effect on insert: if `instruments.current_price_minor IS NULL`, set it to `price_minor` from this trade (bootstrap, idempotent).
 - `GET /api/investment-txns` supports: `from`, `to`, `instrument_id`, `account_id`, `side`.
 - `PATCH /{id}` and `DELETE /{id}` supported.
