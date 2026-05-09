@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.routers.accounts_router import router as accounts_router
+from app.routers.analytics_router import router as analytics_router
 from app.routers.categories_router import router as categories_router
 from app.routers.dashboard_router import router as dashboard_router
 from app.routers.health_router import router as health_router
@@ -109,3 +110,4 @@ app.include_router(investment_txns_router)
 app.include_router(holdings_router)
 app.include_router(dashboard_router)
 app.include_router(ledger_router)
+app.include_router(analytics_router)
