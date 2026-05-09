@@ -17,6 +17,7 @@ from app.schemas.dashboard_schema import (
     CategoryBreakdownItem,
     NetWorthPoint,
 )
+from app.schemas.monthly_schema import MonthRow
 
 # ---------------------------------------------------------------------------
 # Block 1 — Cashflow
@@ -271,6 +272,108 @@ def compute_networth_series(
 
 
 # ---------------------------------------------------------------------------
+# Block 5 — Monthly cashflow summary
+# ---------------------------------------------------------------------------
+
+
+def compute_monthly_summary(
+    db: Session, from_date: date, to_date: date
+) -> list[MonthRow]:
+    """
+    Return per-month income, expense, and investment totals for the date range,
+    along with derived percentages (expense/income, invest/income, savings/income).
+
+    Uses the same UNION ALL pattern from the design doc §4b:
+    - Pull income and expense from transactions, grouped by strftime('%Y-%m').
+    - Pull buy-side investment outflows from investment_txns, same grouping.
+    - Merge the two result sets in Python by year-month key.
+
+    All *_pct fields are None when income is 0 to avoid division by zero — a month
+    with zero income but non-zero expenses would produce a meaningless percentage.
+    """
+    # Aggregate income and expense per month from the transactions table.
+    txn_rows = (
+        db.query(
+            func.strftime("%Y-%m", Transaction.occurred_on).label("ym"),
+            Transaction.kind,
+            func.sum(Transaction.amount_minor).label("total"),
+        )
+        .filter(
+            Transaction.occurred_on >= from_date,
+            Transaction.occurred_on <= to_date,
+            Transaction.kind.in_(["income", "expense"]),
+        )
+        .group_by(
+            func.strftime("%Y-%m", Transaction.occurred_on),
+            Transaction.kind,
+        )
+        .all()
+    )
+
+    # Aggregate buy-side investment outflows per month from investment_txns.
+    # sell and dividend are cash inflows — excluded from "invest_minor" per the spec.
+    inv_rows = (
+        db.query(
+            func.strftime("%Y-%m", InvestmentTxn.occurred_on).label("ym"),
+            func.sum(
+                InvestmentTxn.quantity * InvestmentTxn.price_minor
+                + InvestmentTxn.fee_minor
+            ).label("total"),
+        )
+        .filter(
+            InvestmentTxn.occurred_on >= from_date,
+            InvestmentTxn.occurred_on <= to_date,
+            InvestmentTxn.side == "buy",
+        )
+        .group_by(func.strftime("%Y-%m", InvestmentTxn.occurred_on))
+        .all()
+    )
+
+    # Build a dict keyed by ym so we can merge the two result sets.
+    # Start with every ym that appears in either result set.
+    all_yms: set[str] = (
+        {row.ym for row in txn_rows} | {row.ym for row in inv_rows}
+    )
+
+    # If there is no data at all, still emit a row for each month in range
+    # so the frontend always gets the full month skeleton.
+    if not all_yms:
+        all_yms = set(_ym_labels_in_range(from_date, to_date))
+
+    income_by_ym: dict[str, int] = {}
+    expense_by_ym: dict[str, int] = {}
+    for row in txn_rows:
+        if row.kind == "income":
+            income_by_ym[row.ym] = income_by_ym.get(row.ym, 0) + row.total
+        else:
+            expense_by_ym[row.ym] = expense_by_ym.get(row.ym, 0) + row.total
+
+    invest_by_ym: dict[str, int] = {row.ym: int(row.total) for row in inv_rows}
+
+    result = []
+    for ym in sorted(all_yms):
+        income = income_by_ym.get(ym, 0)
+        expense = expense_by_ym.get(ym, 0)
+        invest = invest_by_ym.get(ym, 0)
+        savings = income - expense - invest
+
+        result.append(
+            MonthRow(
+                ym=ym,
+                income_minor=income,
+                expense_minor=expense,
+                invest_minor=invest,
+                expense_pct=round(expense / income, 4) if income > 0 else None,
+                invest_pct=round(invest / income, 4) if income > 0 else None,
+                savings_minor=savings,
+                savings_pct=round(savings / income, 4) if income > 0 else None,
+            )
+        )
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
@@ -300,3 +403,20 @@ def _month_ends_in_range(from_date: date, to_date: date) -> list[date]:
             year += 1
 
     return months
+
+
+def _ym_labels_in_range(from_date: date, to_date: date) -> list[str]:
+    """
+    Return "YYYY-MM" labels for every month between from_date and to_date.
+    Used to ensure the monthly summary always returns a row for every month
+    even when there is no data, so the frontend chart has a complete x-axis.
+    """
+    labels = []
+    year, month = from_date.year, from_date.month
+    while (year, month) <= (to_date.year, to_date.month):
+        labels.append(f"{year:04d}-{month:02d}")
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    return labels
