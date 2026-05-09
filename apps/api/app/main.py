@@ -16,6 +16,7 @@ from app.routers.health_router import router as health_router
 from app.routers.holdings_router import router as holdings_router
 from app.routers.instruments_router import router as instruments_router
 from app.routers.investment_txns_router import router as investment_txns_router
+from app.routers.ledger_router import router as ledger_router
 from app.routers.transactions_router import router as transactions_router
 
 app = FastAPI(title="AI Personal Finance API", version="0.1.0")
@@ -107,3 +108,4 @@ app.include_router(instruments_router)
 app.include_router(investment_txns_router)
 app.include_router(holdings_router)
 app.include_router(dashboard_router)
+app.include_router(ledger_router)
