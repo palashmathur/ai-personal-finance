@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.routers.accounts_router import router as accounts_router
 from app.routers.categories_router import router as categories_router
+from app.routers.dashboard_router import router as dashboard_router
 from app.routers.health_router import router as health_router
 from app.routers.holdings_router import router as holdings_router
 from app.routers.instruments_router import router as instruments_router
@@ -105,3 +106,4 @@ app.include_router(transactions_router)
 app.include_router(instruments_router)
 app.include_router(investment_txns_router)
 app.include_router(holdings_router)
+app.include_router(dashboard_router)
