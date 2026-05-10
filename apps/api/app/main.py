@@ -13,6 +13,7 @@ from app.routers.accounts_router import router as accounts_router
 from app.routers.analytics_router import router as analytics_router
 from app.routers.categories_router import router as categories_router
 from app.routers.dashboard_router import router as dashboard_router
+from app.routers.imports_router import router as imports_router
 from app.routers.health_router import router as health_router
 from app.routers.holdings_router import router as holdings_router
 from app.routers.instruments_router import router as instruments_router
@@ -111,3 +112,4 @@ app.include_router(holdings_router)
 app.include_router(dashboard_router)
 app.include_router(ledger_router)
 app.include_router(analytics_router)
+app.include_router(imports_router)
