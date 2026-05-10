@@ -182,11 +182,23 @@ PF-10 through PF-18
 
 #### PF-17 — CSV import backend (parse + bulk insert)
 **Goal:** Two-step import API: parse preview → confirm insert.
+
+**Canonical CSV format (user creates their own CSV in this structure — no bank-specific parsing):**
+| # | Column | Type | Required | Format |
+|---|---|---|---|---|
+| 1 | `date` | Date | Yes | `DD/MM/YYYY` |
+| 2 | `amount` | Decimal | Yes | Positive number, up to 2 decimal places |
+| 3 | `type` | Text | Yes | `debit` or `credit` |
+| 4 | `narration` | Text | Yes | Free text |
+| 5 | `category` | Text | No | Category name hint, blank if unknown |
+
 **AC:**
-- `POST /api/imports/transactions/preview` accepts multipart CSV; returns parsed rows as `[{date, amount_minor, note, suggested_category_id}]` without inserting. Hardcoded HDFC Bank column mapping.
-- `POST /api/imports/transactions/confirm` accepts `[{...row, account_id, category_id}]`; bulk-inserts in one DB transaction; returns `{inserted, skipped}`.
-- Skip detection: `(amount_minor, occurred_on, note)` exact match in existing rows.
-- pytest: happy CSV, duplicate detection, malformed CSV (422).
+- `POST /api/imports/transactions/preview?bank=hdfc` accepts multipart CSV in the canonical format above; returns parsed rows as `[{occurred_on, amount_minor, kind, note, suggested_category_id}]` without inserting.
+- Parser validates: required columns present, `type` is `debit`/`credit`, `date` is `YYYY-MM-DD`, `amount` is a positive number. Returns 422 with a clear message on any violation.
+- `category` column (optional): if non-blank, parser does a case-insensitive name lookup in the categories table and sets `suggested_category_id`. No match → `null`.
+- `POST /api/imports/transactions/confirm` accepts `[{occurred_on, amount_minor, kind, note, account_id, category_id}]`; bulk-inserts in one DB transaction; returns `{inserted, skipped}`.
+- Skip detection: exact match on `(amount_minor, occurred_on, note)` in existing transactions rows.
+- pytest: happy CSV, duplicate detection, malformed CSV (missing column → 422, bad date → 422, bad type → 422).
 **Deps:** PF-8.
 
 #### PF-18 — Postman collection: Investments + Analytics
