@@ -13,7 +13,7 @@ If require suggest langgraph for AI agent workflow.
 
 **Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
 
-**Completed tickets:** PF-1 through PF-9, PF-11 through PF-19 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary, CSV import backend, AI client + audit log). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
+**Completed tickets:** PF-1 through PF-9, PF-11 through PF-20 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary, CSV import backend, AI client + audit log, Generic agent loop). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
 
 ---
 
@@ -194,3 +194,9 @@ After every implementation, provide a short manual test block so the user can ve
 - **Audit log:** Every LLM call writes a row to `ai_calls`. No LangSmith dependency. `GET /api/ai/usage?from=&to=` aggregates by feature with cache hit rate. Test the endpoint by inserting rows directly — no Anthropic API calls needed in tests.
 - **Model selection per feature:** Haiku for auto-categorisation, Sonnet for NL input / insights / chat, Opus only for explicit "deep analysis" user triggers.
 - **Config:** `ANTHROPIC_API_KEY` is loaded via `app/config.py` (pydantic-settings). Copy `.env.example` → `.env` and fill in the real key before running any AI feature.
+- **Agent loop:** `app/ai/agent.py::run_agent()` is the single reusable tool-use loop. It accepts `tools` (list of JSON schemas for Claude) and `tool_handlers` (dict of `{name: callable}`). These are kept separate because PF-21's `@tool` decorator will unify them; before that, callers pass them independently.
+- **Message list safety:** `run_agent` passes `list(current_messages)` (a copy) to each `call_llm` call so mock captures in tests see distinct snapshots rather than the mutated reference.
+- **Tool result serialization:** `_serialize_result()` converts dicts/lists to JSON strings and everything else to `str()`. Tool handlers should return plain Python types — no Anthropic SDK types.
+- **Unknown tool handling:** If Claude calls a tool name not in `tool_handlers`, `run_agent` records `{"error": "Unknown tool: <name>"}` as the result and lets Claude react, rather than crashing the whole request.
+- **Content conversion:** `_content_to_dicts()` converts Anthropic SDK `ContentBlock` objects to plain dicts before appending to the message history. This keeps message history as pure Python dicts throughout — no SDK types leak into `current_messages`.
+- **Agent tests:** Patch `app.ai.agent.call_llm` (not `app.ai.client.call_llm`) and use fake dataclass objects for messages — no `anthropic` import needed in test files.
