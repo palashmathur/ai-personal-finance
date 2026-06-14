@@ -10,12 +10,13 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.routers.accounts_router import router as accounts_router
+from app.routers.ai_router import router as ai_router
 from app.routers.analytics_router import router as analytics_router
 from app.routers.categories_router import router as categories_router
 from app.routers.dashboard_router import router as dashboard_router
-from app.routers.imports_router import router as imports_router
 from app.routers.health_router import router as health_router
 from app.routers.holdings_router import router as holdings_router
+from app.routers.imports_router import router as imports_router
 from app.routers.instruments_router import router as instruments_router
 from app.routers.investment_txns_router import router as investment_txns_router
 from app.routers.ledger_router import router as ledger_router
@@ -104,6 +105,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
 # ---------------------------------------------------------------------------
 app.include_router(health_router)
 app.include_router(accounts_router)
+app.include_router(ai_router)
 app.include_router(categories_router)
 app.include_router(transactions_router)
 app.include_router(instruments_router)

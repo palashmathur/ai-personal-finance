@@ -13,7 +13,7 @@ If require suggest langgraph for AI agent workflow.
 
 **Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
 
-**Completed tickets:** PF-1 through PF-9, PF-11 through PF-17 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
+**Completed tickets:** PF-1 through PF-9, PF-11 through PF-19 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary, CSV import backend, AI client + audit log). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
 
 ---
 
@@ -184,10 +184,13 @@ After every implementation, provide a short manual test block so the user can ve
 
 ---
 
-## AI layer decisions (PF-22 onwards)
+## AI layer decisions (PF-19 onwards)
 
-- **Prompt caching:** `cache_control: {"type": "ephemeral"}` on system prompts and static context (category list, account list). Without this, every Haiku categorisation call pays full token cost.
+- **Single entry point:** All Anthropic API calls go through `app/ai/client.py::call_llm()`. No feature imports `anthropic` directly. The Anthropic SDK types stay within `app/ai/` — routers and services only see plain Python objects returned by feature modules.
+- **Prompt caching:** Pass system prompt blocks with `cache_control: {"type": "ephemeral"}` already set in the list passed to `client.create(system=[...])`. The client forwards them as-is — it does not add caching automatically. Callers are responsible for marking what to cache.
+- **Cache token field names:** The Anthropic SDK usage object uses `cache_read_input_tokens` and `cache_creation_input_tokens`. The `ai_calls` DB table uses shorter names `cache_read_tokens` and `cache_creation_tokens`. Always use `getattr(usage, "cache_read_input_tokens", 0) or 0` when reading from the SDK — the fields may be absent (None) if caching was not used.
 - **Structured output:** Use tool-use with `tool_choice` forced to a specific tool — not JSON mode.
 - **Streaming:** `client.messages.stream(...)` piped straight to `text/event-stream` for the chat UI.
-- **Audit log:** Every LLM call writes a row to `ai_calls(feature, model, input_tokens, output_tokens, cache_read_tokens, latency_ms)`. No LangSmith dependency.
+- **Audit log:** Every LLM call writes a row to `ai_calls`. No LangSmith dependency. `GET /api/ai/usage?from=&to=` aggregates by feature with cache hit rate. Test the endpoint by inserting rows directly — no Anthropic API calls needed in tests.
 - **Model selection per feature:** Haiku for auto-categorisation, Sonnet for NL input / insights / chat, Opus only for explicit "deep analysis" user triggers.
+- **Config:** `ANTHROPIC_API_KEY` is loaded via `app/config.py` (pydantic-settings). Copy `.env.example` → `.env` and fill in the real key before running any AI feature.

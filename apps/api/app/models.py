@@ -315,6 +315,52 @@ class InvestmentTxn(Base):
     instrument: Mapped["Instrument"] = relationship("Instrument", lazy="joined")
 
 
+class AICall(Base):
+    """
+    Audit log for every Anthropic API call made by the app.
+
+    Every time the app calls Claude — for categorization, NL input, insights, or chat —
+    a row lands here with the token counts and latency. This is how we track cost per
+    feature and catch regressions (e.g. "why did categorization cost 3× more this week?").
+
+    Token billing breakdown:
+      input_tokens          — tokens you sent; billed at the model's input rate.
+      output_tokens         — tokens Claude replied with; billed at the output rate.
+      cache_read_tokens     — tokens that hit the prompt cache (~10% of normal input cost).
+      cache_creation_tokens — tokens that populated the cache (~125% of normal, paid once).
+    """
+
+    __tablename__ = "ai_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # Which feature triggered this call. e.g. "categorize", "nl_input", "insights", "chat".
+    # Lets you break down cost and latency per feature in the usage endpoint.
+    feature: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Which Claude model was used. e.g. "claude-haiku-4-5", "claude-sonnet-4-6".
+    # Different models have different per-token prices, so tracking this is essential
+    # for accurate cost attribution.
+    model: Mapped[str] = mapped_column(String, nullable=False)
+
+    # Raw token counts as returned by the Anthropic API usage object.
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Prompt cache token counts. Both are 0 if caching wasn't used for this call.
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cache_creation_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Wall-clock time from sending the request to receiving the full response, in milliseconds.
+    # Useful for spotting slow prompts or latency regressions across models.
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # When this call happened. Used to filter usage by date range in the usage endpoint.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
 class Settings(Base):
     """
     A single-row configuration table for global app settings.
