@@ -5,16 +5,18 @@
 # (end_turn, single tool, multiple tools, max_steps exceeded, unknown tool)
 # without a network connection or API key.
 #
-# The fake objects mirror the shape of the real Anthropic SDK response —
-# stop_reason, content list with .type / .text / .id / .name / .input.
-# The loop only reads those attributes, so duck-typing is enough.
+# PF-21 update: tools are now Tool objects instead of separate schema dicts +
+# handler dicts. _ADD_NUMBERS_TOOL below is the single source of truth for both
+# the schema and the handler used across all tests.
 
 import dataclasses
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import BaseModel, Field
 
 from app.ai.agent import AgentError, AgentResult, run_agent
+from app.ai.tools import Tool
 
 # ---------------------------------------------------------------------------
 # Fake Anthropic response objects
@@ -60,23 +62,35 @@ def _tool_use(name: str, tool_input: dict, tool_id: str = "toolu_01") -> FakeMes
 
 
 # ---------------------------------------------------------------------------
+# Test tool — replaces the old _TOOLS dict + _HANDLERS dict
+# ---------------------------------------------------------------------------
+# Tool objects bundle schema + handler together (that's the whole point of PF-21).
+# We create a simple add_numbers Tool directly so no TOOL_REGISTRY side effects
+# bleed between test modules.
+
+
+class _AddInput(BaseModel):
+    a: int = Field(description="First number")
+    b: int = Field(description="Second number")
+
+
+def _add_numbers_handler(params: _AddInput) -> int:
+    return params.a + params.b
+
+
+_ADD_NUMBERS_TOOL = Tool(
+    name="add_numbers",
+    description="Add two integers.",
+    input_model=_AddInput,
+    handler=_add_numbers_handler,
+)
+
+# ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
 _SYSTEM = [{"type": "text", "text": "You are a test assistant."}]
 _MESSAGES = [{"role": "user", "content": "Hello"}]
-_TOOLS = [
-    {
-        "name": "add_numbers",
-        "description": "Add two integers.",
-        "input_schema": {
-            "type": "object",
-            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
-            "required": ["a", "b"],
-        },
-    }
-]
-_HANDLERS = {"add_numbers": lambda a, b: a + b}
 
 
 def _run(**kwargs):
@@ -85,8 +99,7 @@ def _run(**kwargs):
         feature="test",
         messages=_MESSAGES,
         system=_SYSTEM,
-        tools=_TOOLS,
-        tool_handlers=_HANDLERS,
+        tools=[_ADD_NUMBERS_TOOL],
         model="claude-haiku-4-5",
         db=MagicMock(),
     )
@@ -166,13 +179,13 @@ def test_max_steps_raises_agent_error(mock_call_llm):
 
 @patch("app.ai.agent.call_llm")
 def test_unknown_tool_records_error_and_continues(mock_call_llm):
-    """Calling a tool not in tool_handlers records an error result — loop continues."""
+    """Calling a tool not in the tools list records an error result — loop continues."""
     mock_call_llm.side_effect = [
         _tool_use("nonexistent_tool", {"x": 99}),
         _end_turn("Handled gracefully."),
     ]
 
-    result = _run(tool_handlers={})  # empty — no handlers registered
+    result = _run(tools=[])  # empty list — no tools registered
 
     assert result.text == "Handled gracefully."
     assert len(result.steps) == 1

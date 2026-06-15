@@ -4,6 +4,10 @@
 # it returns stop_reason="tool_use" instead of a final answer. This loop executes
 # the tool, sends the result back, and keeps going until Claude says "end_turn"
 # or we hit max_steps and give up.
+#
+# Tools are passed as a list[Tool] — each Tool object carries both the Anthropic
+# schema (what Claude sees) and the handler (what we run). One object, one place
+# to look, instead of keeping a schema list and a handler dict in sync separately.
 
 import dataclasses
 import json
@@ -12,6 +16,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.ai.client import call_llm
+from app.ai.tools import Tool
 
 
 class AgentError(Exception):
@@ -40,19 +45,23 @@ def run_agent(
     feature: str,
     messages: list[dict],
     system: list[dict],
-    tools: list[dict],
-    tool_handlers: dict[str, Any],
+    tools: list[Tool],
     model: str,
     max_steps: int = 8,
     db: Session,
 ) -> AgentResult:
     """Run the tool-use loop until Claude says end_turn or max_steps is exceeded.
 
-    tools         — tool schemas in Anthropic format (what Claude sees).
-    tool_handlers — {tool_name: callable} — the Python functions to actually run.
+    tools — list of Tool objects. Each Tool carries both the Anthropic schema
+            (what Claude sees) and the handler (what we run when Claude calls it).
     """
     steps: list[AgentStep] = []
     history = list(messages)  # copy so we don't mutate the caller's list
+
+    # Build a name → Tool lookup once so each iteration is O(1).
+    # tool_schemas is what we send to Claude; tool_map is what we use to run handlers.
+    tool_map: dict[str, Tool] = {t.name: t for t in tools}
+    tool_schemas = [t.schema for t in tools] if tools else None
 
     for _ in range(max_steps):
         response = call_llm(
@@ -60,7 +69,7 @@ def run_agent(
             model=model,
             system=system,
             messages=list(history),  # snapshot per iteration
-            tools=tools or None,
+            tools=tool_schemas,
             db=db,
         )
 
@@ -74,7 +83,7 @@ def run_agent(
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            result = _run_handler(block.name, block.input, tool_handlers)
+            result = _run_tool(block.name, dict(block.input), tool_map)
             steps.append(AgentStep(
                 tool_name=block.name,
                 tool_input=dict(block.input),
@@ -98,12 +107,16 @@ def run_agent(
     )
 
 
-def _run_handler(name: str, tool_input: dict, handlers: dict) -> Any:
-    """Call the named handler, or return an error dict if the tool is unknown."""
-    handler = handlers.get(name)
-    if handler is None:
+def _run_tool(name: str, tool_input: dict, tool_map: dict) -> Any:
+    """Call the named tool's run() method, or return an error dict if unknown.
+
+    Returning an error dict (instead of raising) lets Claude see the error message
+    and potentially react — e.g. try a different tool or ask the user to clarify.
+    """
+    t = tool_map.get(name)
+    if t is None:
         return {"error": f"Unknown tool: {name}"}
-    return handler(**tool_input)
+    return t.run(**tool_input)
 
 
 def _extract_text(content: list) -> str:
