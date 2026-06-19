@@ -6,11 +6,17 @@
 #   3. Malformed CSV — missing column, bad date, bad type all return 422.
 #
 # Also tests:
-#   4. Category name hint in CSV maps to suggested_category_id.
-#   5. Blank category column → suggested_category_id is None.
+#   4. Category name hint in CSV → category_id + category_name + source="csv" (no LLM).
+#   5. Blank category column + no rule → suggest_batch fills it in (source="rule" or "llm").
 #   6. Empty confirm body returns 422.
+#
+# LLM mock strategy: an autouse fixture patches call_llm with a no-match response
+# so tests that don't care about categorization never hit the real Anthropic API.
+# Tests that specifically assert categorization behaviour set their own mock.
 
+import dataclasses
 import io
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -58,6 +64,66 @@ def setup_db():
     Base.metadata.drop_all(bind=_TEST_ENGINE)
     with _TEST_ENGINE.connect() as conn:
         conn.execute(__import__("sqlalchemy").text("PRAGMA foreign_keys=ON"))
+
+
+# ---------------------------------------------------------------------------
+# Fake LLM response objects (same duck-typing pattern as test_categorize.py)
+# ---------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class _FakeToolUseBlock:
+    name: str
+    input: dict
+    type: str = "tool_use"
+    id: str = "toolu_01"
+
+
+@dataclasses.dataclass
+class _FakeMessage:
+    stop_reason: str
+    content: list
+    usage: object = dataclasses.field(
+        default_factory=lambda: type("U", (), {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        })()
+    )
+
+
+def _llm_no_match() -> _FakeMessage:
+    """LLM returns null — no category fits. Used as the default mock."""
+    return _FakeMessage(
+        stop_reason="tool_use",
+        content=[_FakeToolUseBlock(
+            name="suggest_category",
+            input={"category_id": None, "confidence": 0.0, "suggested_rule": None},
+        )],
+    )
+
+
+def _llm_match(category_id: int) -> _FakeMessage:
+    """LLM returns a specific category."""
+    return _FakeMessage(
+        stop_reason="tool_use",
+        content=[_FakeToolUseBlock(
+            name="suggest_category",
+            input={"category_id": category_id, "confidence": 0.9, "suggested_rule": None},
+        )],
+    )
+
+
+@pytest.fixture(autouse=True)
+def mock_llm():
+    """
+    Default: LLM returns no match for every call.
+    This prevents any test from hitting the real Anthropic API accidentally.
+    Tests that want specific LLM behaviour can override mock_llm.return_value.
+    """
+    with patch("app.services.categorize.call_llm") as m:
+        m.return_value = _llm_no_match()
+        yield m
 
 
 client = TestClient(app, raise_server_exceptions=False)
@@ -113,7 +179,7 @@ def test_preview_parses_debit_as_expense():
     rows = {r["note"]: r for r in resp.json()["rows"]}
     assert rows["UPI-SWIGGY-FOOD"]["kind"] == "expense"
     assert rows["UPI-SWIGGY-FOOD"]["amount_minor"] == 45000   # 450.00 × 100
-    assert rows["UPI-SWIGGY-FOOD"]["occurred_on"] == "2026-05-09"  # stored as ISO in DB
+    assert rows["UPI-SWIGGY-FOOD"]["occurred_on"] == "2026-05-09"
 
 
 def test_preview_parses_credit_as_income():
@@ -135,28 +201,73 @@ def test_preview_writes_nothing_to_db():
 # Category suggestion
 # ---------------------------------------------------------------------------
 
-def test_preview_suggests_category_when_name_matches():
-    """Text category hint matched case-insensitively to a category name."""
+def test_preview_suggests_category_when_csv_name_matches():
+    """
+    When the CSV category column matches a DB category name, the row gets
+    category_id + category_name immediately — no rule/LLM needed.
+    """
     food_id = _seed_category("Food", "expense")
+    _seed_category("Salary", "income")
+
     resp = _upload_preview(_VALID_CSV)
     rows = {r["note"]: r for r in resp.json()["rows"]}
-    assert rows["UPI-SWIGGY-FOOD"]["suggested_category_id"] == food_id
+
+    assert rows["UPI-SWIGGY-FOOD"]["category_id"] == food_id
+    assert rows["UPI-SWIGGY-FOOD"]["category_name"] == "Food"
+    assert rows["UPI-SWIGGY-FOOD"]["category_source"] == "csv"
 
 
-
-def test_preview_blank_category_returns_none():
-    """Rows with no category hint must have suggested_category_id=None."""
+def test_preview_csv_category_does_not_call_llm_for_matched_rows(mock_llm):
+    """Rows matched by CSV category name must not trigger an LLM call."""
     _seed_category("Food", "expense")
-    resp = _upload_preview(_VALID_CSV)
-    rows = {r["note"]: r for r in resp.json()["rows"]}
-    assert rows["ATM CASH WITHDRAWAL"]["suggested_category_id"] is None
+    _seed_category("Salary", "income")
+
+    _upload_preview(_VALID_CSV)
+
+    # Only the 2 rows without a CSV category hint (Zomato and ATM) should hit the LLM.
+    # The LLM returns no-match for both, so call_count should be 2 not 4.
+    assert mock_llm.call_count == 2
 
 
-def test_preview_unmatched_category_returns_none():
-    """A category hint that doesn't match any DB category returns None."""
+def test_preview_blank_category_falls_back_to_suggest(mock_llm):
+    """Rows with no CSV category column go through suggest_batch (rule or LLM)."""
+    food_id = _seed_category("Food", "expense")
+    _seed_category("Salary", "income")
+    mock_llm.return_value = _llm_match(food_id)
+
     resp = _upload_preview(_VALID_CSV)
     rows = {r["note"]: r for r in resp.json()["rows"]}
-    assert rows["UPI-SWIGGY-FOOD"]["suggested_category_id"] is None
+
+    # ATM CASH WITHDRAWAL has no CSV category → LLM suggested Food
+    assert rows["ATM CASH WITHDRAWAL"]["category_id"] == food_id
+    assert rows["ATM CASH WITHDRAWAL"]["category_source"] == "llm"
+
+
+def test_preview_unmatched_csv_category_returns_none():
+    """A CSV category hint that doesn't match any DB category → category_id is None."""
+    # No categories seeded → lookup fails → falls back to LLM (mocked no-match)
+    resp = _upload_preview(_VALID_CSV)
+    rows = {r["note"]: r for r in resp.json()["rows"]}
+    assert rows["UPI-SWIGGY-FOOD"]["category_id"] is None
+
+
+def test_preview_rule_match_skips_llm(mock_llm):
+    """When a categorization rule covers a note, the LLM is not called for that row."""
+    food_id = _seed_category("Food", "expense")
+    _seed_category("Salary", "income")  # needed so Salary CSV hint resolves → skips suggest_batch
+    # Seed a rule that covers Zomato
+    client.post("/api/categorize/accept", json={
+        "pattern": "(?i)zomato",
+        "category_id": food_id,
+    })
+
+    _upload_preview(_VALID_CSV)
+
+    # Swiggy → CSV name match (Food seeded) → skips suggest_batch
+    # Salary → CSV name match (Salary seeded) → skips suggest_batch
+    # Zomato → no CSV category, but rule matches → no LLM
+    # ATM → no CSV category, no rule → LLM called once
+    assert mock_llm.call_count == 1
 
 
 # ---------------------------------------------------------------------------

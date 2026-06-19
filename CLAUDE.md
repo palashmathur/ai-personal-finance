@@ -13,7 +13,7 @@ If require suggest langgraph for AI agent workflow.
 
 **Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
 
-**Completed tickets:** PF-1 through PF-9, PF-11 through PF-21 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary, CSV import backend, AI client + audit log, Generic agent loop, Tool registry). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
+**Completed tickets:** PF-1 through PF-9, PF-11 through PF-22 (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary, CSV import backend, AI client + audit log, Generic agent loop, Tool registry, Auto-categorize endpoint). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
 
 ---
 
@@ -146,6 +146,10 @@ Migrations (from `apps/api/`):
 **Investment account types:** `broker`, `wallet`, `bank`, and `cash` are all valid for investment trades. `credit_card` is the only excluded type. Bank/cash are allowed because SIP debits come directly from a bank account without a separate broker. The check lives in `_get_investment_account_or_error` in the investment_txns service.
 
 **Bootstrap price on first trade:** When `instrument.current_price_minor IS NULL`, the first trade sets it to `price_minor`. This is done in the service before `commit()` so both the trade INSERT and the instrument UPDATE land in the same DB transaction. Subsequent trades never overwrite an existing price.
+
+**SQLite Date column requires Python `date` objects:** When seeding a `Transaction` in tests, pass `occurred_on=date(2026, 6, 1)` (a `datetime.date`), not the string `"2026-06-01"`. SQLite's Date type raises `StatementError` if given a plain string.
+
+**Mocking `call_llm` skips the audit log write:** `call_llm` in `app/ai/client.py` is what writes to `ai_calls`. When a test patches `app.services.<feature>.call_llm`, the mock replaces the whole function — so no DB row is written. Tests that verify "LLM was invoked" should assert `mock_llm.assert_called_once()`, not `_ai_calls_count() == 1`. Reserve `_ai_calls_count()` for tests that verify a rule matched and the LLM was *not* called (those don't use a mock, so the real function runs if it were called).
 
 ---
 

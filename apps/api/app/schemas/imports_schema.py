@@ -16,6 +16,12 @@ class PreviewRow(BaseModel):
     One parsed row returned by the preview endpoint.
     Nothing is written to the DB at this stage — this is just the parsed result
     so the user can review it, assign an account, and adjust categories before confirming.
+
+    category_source tells you where the suggestion came from:
+      "csv"  — the CSV file already had a category name that matched a DB category.
+      "rule" — a saved regex rule matched the note instantly (no LLM needed).
+      "llm"  — Claude Haiku made the suggestion.
+      None   — no suggestion could be made (category_id will also be None).
     """
 
     occurred_on: date
@@ -23,9 +29,9 @@ class PreviewRow(BaseModel):
     # "income" for credit rows, "expense" for debit rows.
     kind: str
     note: str
-    # Set when the `category` column in the CSV matches a category name in the DB.
-    # None when the column is blank or no match is found — user picks manually.
-    suggested_category_id: Optional[int]
+    category_id: Optional[int]
+    category_name: Optional[str]
+    category_source: Optional[str]  # "csv" | "rule" | "llm" | None
 
 
 class ConfirmRow(BaseModel):
