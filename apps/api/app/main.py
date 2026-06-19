@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.routers.accounts_router import router as accounts_router
 from app.routers.ai_router import router as ai_router
+from app.routers.categorize_router import router as categorize_router
 from app.routers.analytics_router import router as analytics_router
 from app.routers.categories_router import router as categories_router
 from app.routers.dashboard_router import router as dashboard_router
@@ -106,6 +107,7 @@ async def validation_exception_handler(request, exc: RequestValidationError):
 app.include_router(health_router)
 app.include_router(accounts_router)
 app.include_router(ai_router)
+app.include_router(categorize_router)
 app.include_router(categories_router)
 app.include_router(transactions_router)
 app.include_router(instruments_router)

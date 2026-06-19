@@ -361,6 +361,48 @@ class AICall(Base):
     )
 
 
+class CategorizationRule(Base):
+    """
+    A saved regex rule that maps a transaction note pattern to a category.
+    Rules are checked before any LLM call — if a rule matches, the category is
+    returned instantly at zero cost.
+
+    Users build up rules over time by accepting AI suggestions. Once "(?i)swiggy"
+    is saved as a rule for Dining Out, Claude is never asked about Swiggy again.
+    Rules are checked in descending priority order so specific patterns (e.g.
+    "(?i)swiggy pro") can be ranked above broader ones (e.g. "(?i)swiggy").
+    """
+
+    __tablename__ = "categorization_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # The regex pattern to test against the transaction field.
+    # Python's re.search() is used, so partial matches work.
+    # e.g. "(?i)swiggy" matches "Swiggy dinner" and "SWIGGY ORDER".
+    pattern: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Which transaction field to test the pattern against.
+    # "note" is the only supported value for now.
+    field: Mapped[str] = mapped_column(String, nullable=False, default="note")
+
+    # The category to assign when the pattern matches.
+    # ON DELETE CASCADE: if the category is deleted, this rule is removed too —
+    # a rule pointing to a deleted category is useless and would cause 404s.
+    category_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # Higher priority rules are evaluated first. Lets you put narrow, specific
+    # patterns above broad catch-all patterns for the same merchant.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # When this rule was saved. Useful for auditing and sorting in the rules list UI.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now()
+    )
+
+
 class Settings(Base):
     """
     A single-row configuration table for global app settings.
