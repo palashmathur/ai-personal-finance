@@ -255,6 +255,57 @@ PF-19 through PF-25
 - pytest golden set: 30 hand-labeled notes; assert ≥ 85% match (rules + LLM).
 **Deps:** PF-21, PF-7.
 
+---
+
+#### LangChain migration — inserted between PF-22 and PF-23
+
+> **Why this exists.** PF-19 → PF-22 were built on the raw Anthropic SDK. We're swapping the engine to LangChain (still calling Claude) for three reasons:
+> 1. Learn LangChain as a skill — it's standard in real codebases and job listings.
+> 2. Unlock multi-provider routing for later tickets (e.g. cheap/free Groq for auto-categorize, Claude only where writing quality matters).
+> 3. Get LangSmith tracing — a clickable view of every LLM call, tool call, and retry, much better than reading raw logs.
+>
+> Split into three back-to-back tickets so each one is independently shippable and easy to revert if something breaks. Three because: **install plumbing**, **migrate the working code**, **turn on observability** — each step has a different risk profile and benefits from its own PR.
+>
+> Existing tickets PF-19 / PF-20 / PF-21 are not renumbered. After PF-22c they become historical context for "this is how we built it before we adopted LangChain" — the actual code from those tickets is replaced. Everything from PF-23 onward will be built on the LangChain stack from day one.
+
+#### PF-22a — Install LangChain + LLM factory (plumbing only)
+**Goal:** LangChain installed alongside the existing Anthropic SDK; new `get_llm` factory and audit callback exist but no feature uses them yet. App behavior unchanged.
+**AC:**
+- Add `langchain>=0.3`, `langchain-anthropic>=0.3`, `langchain-core>=0.3` to `apps/api/pyproject.toml`. Do **not** add `langsmith` or `langgraph` yet — those land in PF-22c and PF-50+ respectively.
+- `app/ai/llm.py::get_llm(model, feature, max_tokens=4096)` returns a `ChatAnthropic` instance with an `AuditCallbackHandler(feature=feature)` attached and `metadata={"feature": feature}` set.
+- `app/ai/audit.py::AuditCallbackHandler(BaseCallbackHandler)` implements `on_llm_start` (stash start time) and `on_llm_end` (write one row to `ai_calls` with feature, model, input/output tokens, cache read/creation tokens, latency_ms). Opens a fresh SQLAlchemy session inside the callback (request-scoped session isn't available to callbacks). Catches DB errors and logs them — auditing must never break a user-facing request.
+- Existing `app/ai/client.py::call_llm`, `app/ai/agent.py`, `app/ai/tools.py`, and `app/services/categorize.py` are **untouched** in this ticket. Both code paths coexist temporarily.
+- pytest: integration test that invokes `get_llm(...).invoke("ping")` against a fake/mocked LLM and asserts one new `ai_calls` row with the right `feature`, non-zero `latency_ms`, and matching token counts.
+- pytest: assert the callback swallows DB exceptions cleanly (mock the session to raise; assert the LLM call still returns).
+- Manual: `make api` starts cleanly; `pytest -v` is fully green; `GET /api/ai/usage` still works.
+**Deps:** PF-22.
+
+#### PF-22b — Migrate agent loop + categorize to LangChain; remove old AI client
+**Goal:** All LLM calls flow through `get_llm`. The custom `call_llm`, `@tool` decorator, `Tool` dataclass, and `TOOL_REGISTRY` are deleted — replaced by LangChain primitives.
+**AC:**
+- `app/ai/agent.py::run_agent` rewritten on top of LangChain's `AgentExecutor` (built via `create_tool_calling_agent`). Public signature stays `(messages, system, tools, model, max_steps) → AgentResult` so service-layer callers are untouched. `tools` is now `list[BaseTool]` (LangChain tool objects). The function internally translates `intermediate_steps` into our existing `AgentStep` dataclass.
+- `app/services/categorize.py::_suggest_with_llm` uses `get_llm(...).with_structured_output(_SuggestCategoryOutput)` instead of `call_llm` + forced `tool_choice`. The `@tool`-decorated stub `suggest_category` inside `categorize.py` is deleted — `with_structured_output` handles tool-use schema generation internally.
+- The rules-first path in `categorize.py` (`_match_rule`, `_load_rules`, `_load_categories`, `accept_rule`, `list_rules`, `delete_rule`, `suggest_batch`) is **unchanged** — same code, same behavior.
+- Files deleted: `app/ai/client.py`, `app/ai/tools.py`, `tests/test_tools.py`. The `Tool` dataclass and `@tool` decorator are gone — future features needing autonomous tool-use decorate their tools inline with `langchain_core.tools.tool` in the feature's own file.
+- `tests/test_agent.py` rewritten to mock the AgentExecutor path; defines a fake `@tool` inline; asserts the loop, the `AgentResult` shape, and `max_iterations` enforcement.
+- `tests/test_categorize.py` mock target changes from `app.services.categorize.call_llm` to mocking the LangChain LLM / `with_structured_output` chain. All existing behavioral assertions stay the same (rule path → 0 LLM calls; LLM path → 1 LLM call; rule miss → falls back to LLM; etc.).
+- Prompt caching for Anthropic still active: system messages carry `cache_control` blocks via LangChain's `SystemMessage(content=[...])`. Verify by triggering two categorize calls in the same session and confirming the second `ai_calls` row has `cache_read_tokens > 0`.
+- Manual: `POST /api/categorize/suggest` returns the same shape as before; `GET /api/ai/usage` still shows the categorize feature.
+**Deps:** PF-22a.
+
+#### PF-22c — Enable LangSmith tracing
+**Goal:** Every LangChain call shows up as a clickable trace in the LangSmith UI alongside the local `ai_calls` audit log. Two observability layers, zero extra code at the call sites.
+**AC:**
+- Add `langsmith>=0.1` to `apps/api/pyproject.toml`.
+- Add config fields in `app/config.py`: `langchain_api_key: str = ""`, `langchain_tracing_v2: str = "true"`, `langchain_project: str = "personal-finance"`. Add the same three keys (with empty values) to `.env.example`.
+- No code calls LangSmith directly — once the env vars are present, LangChain auto-sends traces. The `feature` name already flows through via `metadata={"feature": feature}` set in `get_llm` (PF-22a), so traces are filterable by feature in the LangSmith UI.
+- Manual: sign up at smith.langchain.com (free tier — 5k traces/month, plenty for one user), grab the API key, drop it in `.env`, run a `POST /api/categorize/suggest` call, confirm the trace appears in the "personal-finance" project with the correct feature tag and the full request/response visible.
+- Update `CLAUDE.md`: flip the "No LangChain" decision with the new reasoning; document the new pattern (`get_llm`, audit callback, LangSmith env vars, `with_structured_output`); add PF-22a / PF-22b / PF-22c to the completed-tickets list.
+- Update `plans/you-are-a-senior-glowing-piglet.md` Section 6 (AI Integration Plan): replace the "raw Anthropic SDK, not LangChain" stance with the new approach. Keep the old reasoning visible as historical context — don't rewrite history, just add a "Decision revised in PF-22c" note above it.
+**Deps:** PF-22b.
+
+---
+
 #### PF-23 — NL input endpoint
 **Goal:** Parse a natural-language expense/income string into a structured entry.
 **AC:**

@@ -15,6 +15,15 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     "anthropic>=0.40.0",
     "python-multipart>=0.0.12",
+    # LangChain stack added in PF-22a.
+    # We still keep `anthropic` because it's the underlying SDK that
+    # `langchain-anthropic` calls into — removing it would break that wrapper.
+    # `langsmith` and `langgraph` are intentionally NOT added here:
+    #   - langsmith lands in PF-22c when we turn on tracing.
+    #   - langgraph is only relevant if/when we build multi-agent Layer 5.
+    "langchain>=0.3",
+    "langchain-anthropic>=0.3",
+    "langchain-core>=0.3",
 ]
 
 [project.optional-dependencies]
