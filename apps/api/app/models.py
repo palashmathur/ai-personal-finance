@@ -317,17 +317,18 @@ class InvestmentTxn(Base):
 
 class AICall(Base):
     """
-    Audit log for every Anthropic API call made by the app.
+    Audit log for every LLM API call made by the app.
 
-    Every time the app calls Claude — for categorization, NL input, insights, or chat —
+    Every time the app calls the LLM — for categorization, NL input, insights, or chat —
     a row lands here with the token counts and latency. This is how we track cost per
     feature and catch regressions (e.g. "why did categorization cost 3× more this week?").
 
     Token billing breakdown:
       input_tokens          — tokens you sent; billed at the model's input rate.
-      output_tokens         — tokens Claude replied with; billed at the output rate.
-      cache_read_tokens     — tokens that hit the prompt cache (~10% of normal input cost).
-      cache_creation_tokens — tokens that populated the cache (~125% of normal, paid once).
+      output_tokens         — tokens the model replied with; billed at the output rate.
+      cache_read_tokens     — tokens that hit the prompt cache (provider-dependent; ~10%
+                              of normal input cost where the provider supports it).
+      cache_creation_tokens — tokens that populated the cache (paid once, where supported).
     """
 
     __tablename__ = "ai_calls"
@@ -338,12 +339,12 @@ class AICall(Base):
     # Lets you break down cost and latency per feature in the usage endpoint.
     feature: Mapped[str] = mapped_column(String, nullable=False)
 
-    # Which Claude model was used. e.g. "claude-haiku-4-5", "claude-sonnet-4-6".
+    # Which model was used, as reported by the provider (e.g. the resolved model id).
     # Different models have different per-token prices, so tracking this is essential
     # for accurate cost attribution.
     model: Mapped[str] = mapped_column(String, nullable=False)
 
-    # Raw token counts as returned by the Anthropic API usage object.
+    # Raw token counts as reported by the provider's usage metadata.
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -368,7 +369,7 @@ class CategorizationRule(Base):
     returned instantly at zero cost.
 
     Users build up rules over time by accepting AI suggestions. Once "(?i)swiggy"
-    is saved as a rule for Dining Out, Claude is never asked about Swiggy again.
+    is saved as a rule for Dining Out, the LLM is never asked about Swiggy again.
     Rules are checked in descending priority order so specific patterns (e.g.
     "(?i)swiggy pro") can be ranked above broader ones (e.g. "(?i)swiggy").
     """

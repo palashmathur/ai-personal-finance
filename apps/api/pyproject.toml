@@ -24,6 +24,10 @@ dependencies = [
     "langchain>=0.3",
     "langchain-anthropic>=0.3",
     "langchain-core>=0.3",
+    # Provider integrations live behind the get_llm() factory in app/ai/llm.py.
+    # Add a new langchain-<provider> package here and register it there; feature
+    # code never imports a provider directly.
+    "langchain-groq>=0.2",
 ]
 
 [project.optional-dependencies]

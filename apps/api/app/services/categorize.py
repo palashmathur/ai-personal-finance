@@ -1,10 +1,10 @@
 # Business logic for the auto-categorize feature.
 #
 # Two-layer approach:
-#   1. Regex rules   — checked first, in priority order. Free, instant, deterministic.
-#   2. Claude Haiku  — called only when no rule matches. System prompt + categories
-#                      list are marked cache_control=ephemeral so after the first call
-#                      they're served from Anthropic's prompt cache at ~10% of normal cost.
+#   1. Regex rules — checked first, in priority order. Free, instant, deterministic.
+#   2. LLM         — called only when no rule matches. Which provider/model runs is
+#                    decided by config via the get_llm() factory; this module stays
+#                    provider-agnostic.
 #
 # Over time, users accept suggestions → rules grow → AI calls drop toward zero.
 
@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import HTTPException
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.ai.client import call_llm
-from app.ai.tools import tool
+from app.ai.llm import get_llm
 from app.models import CategorizationRule, Category, Transaction
 from app.schemas.categorize_schema import (
     CategorizeAcceptRequest,
@@ -33,11 +33,13 @@ _PROMPT_PATH = Path(__file__).parent.parent / "ai" / "prompts" / "categorize.md"
 _SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8")
 
 # ---------------------------------------------------------------------------
-# Structured output tool — used for schema generation only, never executed.
+# Structured output schema.
 #
-# tool_choice forces Claude to "call" this tool, which makes it return a
-# structured JSON object (block.input) instead of free text. We read that
-# object directly as our answer — no handler is ever invoked.
+# We hand this Pydantic model to LangChain's with_structured_output(). Under the
+# hood LangChain generates a tool-use schema from it and forces LLM to "call"
+# that tool, so the response comes back as a populated _SuggestCategoryOutput
+# instance instead of free text. We never write a handler — the model *is* the
+# contract, and the validated instance is our answer.
 # ---------------------------------------------------------------------------
 
 
@@ -57,11 +59,6 @@ class _SuggestCategoryOutput(BaseModel):
     )
 
 
-@tool(description="Return the category suggestion for a transaction note")
-def suggest_category(params: _SuggestCategoryOutput):
-    pass  # never executed — tool-use is the structured output mechanism here
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -71,9 +68,9 @@ def suggest(note: str, amount_minor: int, db: Session) -> CategorizeSuggestRespo
     """
     Return a category suggestion for a single transaction note.
 
-    Checks saved rules first (no AI call). Falls back to Claude Haiku only when
-    no rule matches. The LLM is forced to call the suggest_category tool so we
-    always get structured JSON back — not free text.
+    Checks saved rules first (no AI call). Falls back to LLM only when
+    no rule matches. The LLM call uses with_structured_output, so we always
+    get a validated _SuggestCategoryOutput back — not free text.
     """
     rules = _load_rules(db)
     rule_match = _match_rule(note, rules, db)
@@ -81,7 +78,7 @@ def suggest(note: str, amount_minor: int, db: Session) -> CategorizeSuggestRespo
         return rule_match
 
     categories = _load_categories(db)
-    return _suggest_with_llm(note, amount_minor, categories, db)
+    return _suggest_with_llm(note, amount_minor, categories)
 
 
 def suggest_batch(
@@ -92,7 +89,7 @@ def suggest_batch(
 
     Rules are loaded once for the whole batch (one DB query, not N).
     Categories are loaded lazily — only if at least one row needs the LLM.
-    This means a 200-row import where 150 rows hit rules makes only ~50 Haiku calls.
+    This means a 200-row import where 150 rows hit rules makes only ~50 LLM calls.
     """
     rules = _load_rules(db)
     categories: Optional[list[Category]] = None  # loaded lazily on first LLM miss
@@ -108,7 +105,7 @@ def suggest_batch(
         if categories is None:
             categories = _load_categories(db)
 
-        categorizeSuggestResponse = _suggest_with_llm(row.note, row.amount_minor, categories, db)
+        categorizeSuggestResponse = _suggest_with_llm(row.note, row.amount_minor, categories)
         results.append(categorizeSuggestResponse)
 
     return results
@@ -124,7 +121,9 @@ def accept_rule(data: CategorizeAcceptRequest, db: Session) -> CategorizationRul
     """
     category = db.get(Category, data.category_id)
     if category is None:
-        raise HTTPException(status_code=404, detail=f"Category with ID: {data.category_id} not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Category with ID: {data.category_id} not found."
+        )
 
     rule = CategorizationRule(
         pattern=data.pattern,
@@ -181,7 +180,7 @@ def _load_rules(db: Session) -> list[CategorizationRule]:
 
 def _load_categories(db: Session) -> list[Category]:
     """Load all active (non-archived) categories for the LLM context."""
-    return db.query(Category).filter(Category.archived == False).all()
+    return db.query(Category).filter(Category.archived.is_(False)).all()
 
 
 def _match_rule(
@@ -199,9 +198,10 @@ def _match_rule(
             if re.search(rule.pattern, note or "", re.IGNORECASE):
                 category = db.get(Category, rule.category_id)
                 if category is None:
-                    # Rule points to a deleted category — skip it 
-                    # Although it is only possible if we delete the categrory after retriving the rules and before reaching here
-                    continue  
+                    # Rule points to a deleted category — skip it. Only possible if
+                    # the category was deleted after we loaded the rules but before
+                    # we reached here.
+                    continue
                 return CategorizeSuggestResponse(
                     category_id=rule.category_id,
                     category_name=category.name,
@@ -220,68 +220,44 @@ def _suggest_with_llm(
     note: str,
     amount_minor: int,
     categories: list[Category],
-    db: Session,
 ) -> CategorizeSuggestResponse:
     """
-    Ask Claude Haiku for a category suggestion when no rule matched.
+    Ask the configured LLM for a category suggestion when no rule matched.
 
-    The system prompt and categories list both carry cache_control=ephemeral.
-    After the first call, Anthropic serves them from the prompt cache at ~10%
-    of normal input token cost — visible as cache_read_tokens > 0 in ai_calls.
+    Routing goes through the get_llm() factory, so which provider and model are
+    used is purely a config concern — this code stays provider-agnostic and never
+    names an LLM. get_llm() also attaches the audit callback, so we don't pass a
+    DB session here; the ai_calls row is written by AuditCallbackHandler on its
+    own session when the call returns.
+
+    with_structured_output() makes LangChain force a tool/JSON schema derived from
+    _SuggestCategoryOutput, so .invoke() hands us back a validated instance of
+    that model rather than free text.
     """
-    system = [
-        {
-            "type": "text",
-            "text": _SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        },
-        {
-            "type": "text",
-            "text": _format_categories(categories),
-            "cache_control": {"type": "ephemeral"},
-        },
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"Transaction note: {note or '(no note)'}\n"
-                f"Amount: ₹{amount_minor / 100:.2f}"
-            ),
-        }
-    ]
+    llm = get_llm(feature="categorize", provider="groq")
+    structured = llm.with_structured_output(_SuggestCategoryOutput)
 
-    response = call_llm(
-        feature="categorize",
-        model="claude-haiku-4-5",
-        system=system,
-        messages=messages,
-        tools=[suggest_category.schema],
-        tool_choice={"type": "tool", "name": "suggest_category"},
-        db=db,
+    # Plain-text system prompt: the static instructions followed by the category
+    # list. Kept provider-agnostic on purpose — no provider-specific hints (e.g.
+    # prompt-cache markers) leak into feature code; that's the factory's concern.
+    system = SystemMessage(
+        content=f"{_SYSTEM_PROMPT}\n\n{_format_categories(categories)}"
+    )
+    human = HumanMessage(
+        content=(
+            f"Transaction note: {note or '(no note)'}\n"
+            f"Amount: ₹{amount_minor / 100:.2f}"
+        )
     )
 
-    # Extract the structured answer from the tool_use block.
-    # With a forced tool_choice this block will always be present.
-    for block in response.content:
-        if block.type == "tool_use":
-            data = block.input
-            cat_id = data.get("category_id")
-            cat_name = _category_name(cat_id, categories)
-            return CategorizeSuggestResponse(
-                category_id=cat_id,
-                category_name=cat_name,
-                confidence=float(data.get("confidence", 0.0)),
-                suggested_rule=data.get("suggested_rule"),
-                source="llm",
-            )
+    result: _SuggestCategoryOutput = structured.invoke([system, human])
 
-    # Fallback — should never happen with forced tool_choice, but be defensive.
+    cat_id = result.category_id
     return CategorizeSuggestResponse(
-        category_id=None,
-        category_name=None,
-        confidence=0.0,
-        suggested_rule=None,
+        category_id=cat_id,
+        category_name=_category_name(cat_id, categories),
+        confidence=float(result.confidence),
+        suggested_rule=result.suggested_rule,
         source="llm",
     )
 
@@ -291,7 +267,7 @@ def _format_categories(categories: list[Category]) -> str:
     Format the category list as a stable string for the LLM system prompt.
 
     Stable = same categories always produce the same string, so the prompt
-    cache stays valid across calls. We include the ID (what Claude must return),
+    cache stays valid across calls. We include the ID (what the LLM must return),
     the name, the kind, and the parent name for context.
     """
     by_id = {c.id: c for c in categories}

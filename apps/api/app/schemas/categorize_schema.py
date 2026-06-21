@@ -22,9 +22,9 @@ class CategorizeSuggestResponse(BaseModel):
     The categorization suggestion returned by the suggest endpoints.
 
     source="rule"  → matched a saved regex rule instantly; no AI call was made.
-    source="llm"   → no rule matched; Claude Haiku was asked.
+    source="llm"   → no rule matched; the LLM was asked.
 
-    category_id is null when no suitable category was found (Claude returned null
+    category_id is null when no suitable category was found (the LLM returned null
     rather than guess — better than a wrong category silently applied).
     """
 
