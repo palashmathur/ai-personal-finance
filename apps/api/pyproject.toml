@@ -18,9 +18,8 @@ dependencies = [
     # LangChain stack added in PF-22a.
     # We still keep `anthropic` because it's the underlying SDK that
     # `langchain-anthropic` calls into — removing it would break that wrapper.
-    # `langsmith` and `langgraph` are intentionally NOT added here:
-    #   - langsmith lands in PF-22c when we turn on tracing.
-    #   - langgraph is only relevant if/when we build multi-agent Layer 5.
+    # `langgraph` is intentionally NOT added: it's only relevant if/when we build
+    # the multi-agent Layer 5.
     "langchain>=0.3",
     "langchain-anthropic>=0.3",
     "langchain-core>=0.3",
@@ -28,6 +27,11 @@ dependencies = [
     # Add a new langchain-<provider> package here and register it there; feature
     # code never imports a provider directly.
     "langchain-groq>=0.2",
+    # LangSmith tracing (PF-22c). This is the exporter LangChain auto-calls into
+    # to ship a clickable trace of every LLM call to smith.langchain.com. No code
+    # imports it directly — it activates purely from the LANGCHAIN_* env vars
+    # (see app/config.py). Stays dormant when LANGCHAIN_API_KEY is blank.
+    "langsmith>=0.1",
 ]
 
 [project.optional-dependencies]
