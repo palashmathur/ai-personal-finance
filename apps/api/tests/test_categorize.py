@@ -1,22 +1,21 @@
 # Tests for the auto-categorize endpoints: app/routers/categorize_router.py
 #
-# All LLM calls are mocked — no Anthropic API key needed.
-# The fake response objects mirror the shape the real SDK returns (stop_reason,
-# content list with type/name/input) so the service can extract block.input
-# the same way it does in production.
+# All LLM calls are mocked — no API key or network needed. We patch the get_llm()
+# factory and drive the with_structured_output(...).invoke(...) chain so it returns
+# a validated _SuggestCategoryOutput, exactly like the real LangChain path does.
+# The tests stay provider-agnostic: nothing here names a concrete LLM provider.
 #
 # Test areas:
 #   1. Rule matching — correct category returned instantly, no ai_calls row.
-#   2. LLM fallback — mocked Haiku response parsed correctly, ai_calls written.
-#   3. Null category (no fit) — Claude returns null, endpoint returns null cleanly.
+#   2. LLM fallback — mocked structured output parsed correctly.
+#   3. Null category (no fit) — the LLM returns null, endpoint returns null cleanly.
 #   4. Batch suggest — rules loaded once, LLM called only for unmatched rows.
 #   5. Accept rule — rule saved, subsequent suggest uses rule path.
 #   6. Optional transaction update on accept.
 #   7. List and delete rules.
-#   8. Prompt caching — second LLM call shows cache_read_tokens > 0.
+#   8. System prompt — the LLM gets the instructions + category list.
 #   9. Golden set — 30 notes, ≥ 85% match.
 
-import dataclasses
 from datetime import date
 from unittest.mock import patch
 
@@ -29,6 +28,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.session import get_db
 from app.main import app
 from app.models import Account, AICall, Base, CategorizationRule, Category, Transaction
+from app.services.categorize import _SuggestCategoryOutput
 
 # ---------------------------------------------------------------------------
 # Test DB setup (same pattern as all other test files)
@@ -71,73 +71,33 @@ def setup_db():
 client = TestClient(app, raise_server_exceptions=False)
 
 # ---------------------------------------------------------------------------
-# Fake Anthropic response objects
+# Fake LLM wiring
 # ---------------------------------------------------------------------------
-# These mirror only the attributes the service reads — duck-typing is enough.
+# After PF-22b the service calls:
+#     get_llm(...).with_structured_output(_SuggestCategoryOutput).invoke(messages)
+# and gets back a populated _SuggestCategoryOutput. So instead of faking raw SDK
+# response blocks, we patch get_llm and make the end of that chain return model
+# instances. _invoke_mock() hands back the .invoke MagicMock so a test can set
+# its return_value / side_effect and inspect the messages it was called with.
 
 
-@dataclasses.dataclass
-class _FakeToolUseBlock:
-    name: str
-    input: dict
-    type: str = "tool_use"
-    id: str = "toolu_01"
-
-
-@dataclasses.dataclass
-class _FakeMessage:
-    stop_reason: str
-    content: list
-    usage: object = dataclasses.field(
-        default_factory=lambda: type("U", (), {
-            "input_tokens": 10,
-            "output_tokens": 5,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-        })()
+def _llm_output(category_id, confidence=0.9, suggested_rule=None) -> _SuggestCategoryOutput:
+    """Build the structured object the LLM chain returns for one suggestion."""
+    return _SuggestCategoryOutput(
+        category_id=category_id,
+        confidence=confidence,
+        suggested_rule=suggested_rule,
     )
 
 
-def _llm_response(category_id, confidence=0.9, suggested_rule=None) -> _FakeMessage:
-    """Build a fake LLM response that suggests category_id."""
-    return _FakeMessage(
-        stop_reason="tool_use",
-        content=[
-            _FakeToolUseBlock(
-                name="suggest_category",
-                input={
-                    "category_id": category_id,
-                    "confidence": confidence,
-                    "suggested_rule": suggested_rule,
-                },
-            )
-        ],
-    )
+def _llm_no_match() -> _SuggestCategoryOutput:
+    """Structured output where the LLM finds no fitting category (category_id=null)."""
+    return _llm_output(category_id=None, confidence=0.0)
 
 
-def _llm_no_match() -> _FakeMessage:
-    """Build a fake LLM response where no category fits (Claude returns null)."""
-    return _FakeMessage(
-        stop_reason="tool_use",
-        content=[
-            _FakeToolUseBlock(
-                name="suggest_category",
-                input={"category_id": None, "confidence": 0.0, "suggested_rule": None},
-            )
-        ],
-    )
-
-
-def _llm_cached_response(category_id) -> _FakeMessage:
-    """Fake LLM response with cache_read_tokens > 0 to simulate prompt cache hit."""
-    msg = _llm_response(category_id)
-    msg.usage = type("U", (), {
-        "input_tokens": 2,
-        "output_tokens": 5,
-        "cache_read_input_tokens": 50,
-        "cache_creation_input_tokens": 0,
-    })()
-    return msg
+def _invoke_mock(mock_get_llm):
+    """Return the .invoke mock at the end of the get_llm(...).with_structured_output(...) chain."""
+    return mock_get_llm.return_value.with_structured_output.return_value.invoke
 
 
 # ---------------------------------------------------------------------------
@@ -266,11 +226,11 @@ def test_higher_priority_rule_wins():
 # ---------------------------------------------------------------------------
 
 
-@patch("app.services.categorize.call_llm")
-def test_suggest_calls_llm_when_no_rule_matches(mock_llm):
-    """When no rule matches, the service calls Claude Haiku and returns the result."""
+@patch("app.services.categorize.get_llm")
+def test_suggest_calls_llm_when_no_rule_matches(mock_get_llm):
+    """When no rule matches, the service calls the LLM and returns the result."""
     cat_id = _seed_category("Groceries")
-    mock_llm.return_value = _llm_response(
+    _invoke_mock(mock_get_llm).return_value = _llm_output(
         cat_id, confidence=0.92, suggested_rule="(?i)amazon fresh"
     )
 
@@ -287,15 +247,15 @@ def test_suggest_calls_llm_when_no_rule_matches(mock_llm):
     assert data["source"] == "llm"
 
 
-@patch("app.services.categorize.call_llm")
-def test_llm_fallback_calls_llm_once(mock_llm):
-    """When no rule matches, call_llm is invoked exactly once."""
+@patch("app.services.categorize.get_llm")
+def test_llm_fallback_calls_llm_once(mock_get_llm):
+    """When no rule matches, the LLM is invoked exactly once."""
     cat_id = _seed_category("Groceries")
-    mock_llm.return_value = _llm_response(cat_id)
+    _invoke_mock(mock_get_llm).return_value = _llm_output(cat_id)
 
     client.post("/api/categorize/suggest", json={"note": "Unknown merchant", "amount_minor": 10000})
 
-    mock_llm.assert_called_once()
+    mock_get_llm.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +263,11 @@ def test_llm_fallback_calls_llm_once(mock_llm):
 # ---------------------------------------------------------------------------
 
 
-@patch("app.services.categorize.call_llm")
-def test_null_category_returned_cleanly(mock_llm):
-    """When Claude returns category_id=null, the endpoint returns null — no crash."""
+@patch("app.services.categorize.get_llm")
+def test_null_category_returned_cleanly(mock_get_llm):
+    """When the LLM returns category_id=null, the endpoint returns null — no crash."""
     _seed_category("Groceries")  # categories exist, just none fit
-    mock_llm.return_value = _llm_no_match()
+    _invoke_mock(mock_get_llm).return_value = _llm_no_match()
 
     resp = client.post(
         "/api/categorize/suggest", json={"note": "Some weird merchant", "amount_minor": 5000}
@@ -326,11 +286,11 @@ def test_null_category_returned_cleanly(mock_llm):
 # ---------------------------------------------------------------------------
 
 
-@patch("app.services.categorize.call_llm")
-def test_batch_returns_one_result_per_row(mock_llm):
+@patch("app.services.categorize.get_llm")
+def test_batch_returns_one_result_per_row(mock_get_llm):
     """suggest-batch returns exactly as many results as input rows, in order."""
     cat_id = _seed_category("Dining Out")
-    mock_llm.return_value = _llm_response(cat_id)
+    _invoke_mock(mock_get_llm).return_value = _llm_output(cat_id)
 
     resp = client.post("/api/categorize/suggest-batch", json={
         "rows": [
@@ -343,12 +303,12 @@ def test_batch_returns_one_result_per_row(mock_llm):
     assert len(resp.json()) == 2
 
 
-@patch("app.services.categorize.call_llm")
-def test_batch_uses_rule_for_matched_rows(mock_llm):
+@patch("app.services.categorize.get_llm")
+def test_batch_uses_rule_for_matched_rows(mock_get_llm):
     """Rows that match a rule return source='rule'; unmatched rows return source='llm'."""
     cat_id = _seed_category("Dining Out")
     _seed_rule("(?i)swiggy", cat_id)  # only Swiggy is covered by a rule
-    mock_llm.return_value = _llm_response(cat_id)
+    _invoke_mock(mock_get_llm).return_value = _llm_output(cat_id)
 
     resp = client.post("/api/categorize/suggest-batch", json={
         "rows": [
@@ -366,12 +326,12 @@ def test_batch_uses_rule_for_matched_rows(mock_llm):
     assert results[3]["source"] == "llm"
 
 
-@patch("app.services.categorize.call_llm")
-def test_batch_calls_llm_only_for_unmatched_rows(mock_llm):
+@patch("app.services.categorize.get_llm")
+def test_batch_calls_llm_only_for_unmatched_rows(mock_get_llm):
     """The LLM is called only for rows that didn't match a rule — not for every row."""
     cat_id = _seed_category("Dining Out")
     _seed_rule("(?i)swiggy", cat_id)
-    mock_llm.return_value = _llm_response(cat_id)
+    _invoke_mock(mock_get_llm).return_value = _llm_output(cat_id)
 
     client.post("/api/categorize/suggest-batch", json={
         "rows": [
@@ -382,7 +342,7 @@ def test_batch_calls_llm_only_for_unmatched_rows(mock_llm):
     })
 
     # Only 1 LLM call (the unknown store), not 3
-    assert mock_llm.call_count == 1
+    assert mock_get_llm.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -390,11 +350,11 @@ def test_batch_calls_llm_only_for_unmatched_rows(mock_llm):
 # ---------------------------------------------------------------------------
 
 
-@patch("app.services.categorize.call_llm")
-def test_accept_saves_rule(mock_llm):
+@patch("app.services.categorize.get_llm")
+def test_accept_saves_rule(mock_get_llm):
     """POST /accept creates a rule that appears in GET /rules."""
     cat_id = _seed_category("Groceries")
-    mock_llm.return_value = _llm_response(cat_id)
+    _invoke_mock(mock_get_llm).return_value = _llm_output(cat_id)
 
     resp = client.post("/api/categorize/accept", json={
         "pattern": "(?i)bigbasket",
@@ -409,8 +369,8 @@ def test_accept_saves_rule(mock_llm):
     assert rule["priority"] == 5
 
 
-@patch("app.services.categorize.call_llm")
-def test_accepted_rule_used_on_next_suggest(mock_llm):
+@patch("app.services.categorize.get_llm")
+def test_accepted_rule_used_on_next_suggest(mock_get_llm):
     """After accepting a rule, the next suggest for a matching note uses the rule path."""
     cat_id = _seed_category("Groceries")
 
@@ -424,7 +384,7 @@ def test_accepted_rule_used_on_next_suggest(mock_llm):
     )
 
     assert resp.json()["source"] == "rule"
-    assert mock_llm.call_count == 0  # no LLM call — rule handled it
+    assert mock_get_llm.call_count == 0  # no LLM call — rule handled it
 
 
 # ---------------------------------------------------------------------------
@@ -520,32 +480,31 @@ def test_delete_nonexistent_rule_returns_404():
 
 
 # ---------------------------------------------------------------------------
-# 8. Prompt caching — second LLM call shows cache tokens
+# 8. System prompt — the LLM gets the instructions + the category list
 # ---------------------------------------------------------------------------
 
 
-@patch("app.services.categorize.call_llm")
-def test_llm_calls_pass_cache_control_on_system_prompt(mock_llm):
+@patch("app.services.categorize.get_llm")
+def test_llm_call_includes_category_list_in_system_prompt(mock_get_llm):
     """
-    The service must pass cache_control=ephemeral on at least one system prompt
-    block so Anthropic can cache the prompt after the first call.
+    The service must hand the LLM a system message containing the available
+    categories (so the model can only pick a real ID). Provider-agnostic: we
+    assert on the message content, not on any provider-specific markers.
     """
     cat_id = _seed_category("Dining Out")
-    mock_llm.side_effect = [
-        _llm_response(cat_id),
-        _llm_cached_response(cat_id),
-    ]
+    invoke = _invoke_mock(mock_get_llm)
+    invoke.return_value = _llm_output(cat_id)
 
     client.post("/api/categorize/suggest", json={"note": "Note A", "amount_minor": 10000})
-    client.post("/api/categorize/suggest", json={"note": "Note B", "amount_minor": 20000})
 
-    assert mock_llm.call_count == 2
-    # Verify cache_control is present in the system arg for both calls
-    for call in mock_llm.call_args_list:
-        system = call.kwargs.get("system", [])
-        assert any(
-            b.get("cache_control") == {"type": "ephemeral"} for b in system
-        ), "System prompt blocks must carry cache_control=ephemeral"
+    assert invoke.call_count == 1
+    # .invoke() gets a [SystemMessage, HumanMessage] list as its first positional
+    # arg. The system content is a plain string holding the prompt + category list.
+    messages = invoke.call_args_list[0].args[0]
+    system = messages[0]
+    assert isinstance(system.content, str)
+    assert "Dining Out" in system.content
+    assert str(cat_id) in system.content
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +512,8 @@ def test_llm_calls_pass_cache_control_on_system_prompt(mock_llm):
 # ---------------------------------------------------------------------------
 
 
-@patch("app.services.categorize.call_llm")
-def test_golden_set_85_percent_accuracy(mock_llm):
+@patch("app.services.categorize.get_llm")
+def test_golden_set_85_percent_accuracy(mock_get_llm):
     """
     30 hand-labelled notes, each with a known correct category.
     10 are covered by seeded rules (free, deterministic).
@@ -614,7 +573,7 @@ def test_golden_set_85_percent_accuracy(mock_llm):
     # Set up mock to return the correct category for each LLM call
     # The 10 rule-matched notes won't hit the LLM at all
     llm_categories = [cat_id for _, cat_id in golden[10:]]
-    mock_llm.side_effect = [_llm_response(cat_id) for cat_id in llm_categories]
+    _invoke_mock(mock_get_llm).side_effect = [_llm_output(cat_id) for cat_id in llm_categories]
 
     correct = 0
     for note, expected_cat_id in golden:

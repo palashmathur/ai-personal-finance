@@ -11,10 +11,9 @@
 #   6. Empty confirm body returns 422.
 #
 # LLM mock strategy: an autouse fixture patches call_llm with a no-match response
-# so tests that don't care about categorization never hit the real Anthropic API.
+# so tests that don't care about categorization never hit a real LLM API.
 # Tests that specifically assert categorization behaviour set their own mock.
 
-import dataclasses
 import io
 from unittest.mock import patch
 
@@ -27,6 +26,7 @@ from sqlalchemy.pool import StaticPool
 from app.db.session import get_db
 from app.main import app
 from app.models import Base
+from app.services.categorize import _SuggestCategoryOutput
 
 _TEST_ENGINE = create_engine(
     "sqlite:///:memory:",
@@ -67,63 +67,37 @@ def setup_db():
 
 
 # ---------------------------------------------------------------------------
-# Fake LLM response objects (same duck-typing pattern as test_categorize.py)
+# Fake LLM output objects
 # ---------------------------------------------------------------------------
-
-@dataclasses.dataclass
-class _FakeToolUseBlock:
-    name: str
-    input: dict
-    type: str = "tool_use"
-    id: str = "toolu_01"
+# After PF-22b the categorize service calls
+# get_llm(...).with_structured_output(_SuggestCategoryOutput).invoke(messages)
+# and gets a populated model back, so these helpers return that model directly.
 
 
-@dataclasses.dataclass
-class _FakeMessage:
-    stop_reason: str
-    content: list
-    usage: object = dataclasses.field(
-        default_factory=lambda: type("U", (), {
-            "input_tokens": 10,
-            "output_tokens": 5,
-            "cache_read_input_tokens": 0,
-            "cache_creation_input_tokens": 0,
-        })()
-    )
-
-
-def _llm_no_match() -> _FakeMessage:
+def _llm_no_match() -> _SuggestCategoryOutput:
     """LLM returns null — no category fits. Used as the default mock."""
-    return _FakeMessage(
-        stop_reason="tool_use",
-        content=[_FakeToolUseBlock(
-            name="suggest_category",
-            input={"category_id": None, "confidence": 0.0, "suggested_rule": None},
-        )],
-    )
+    return _SuggestCategoryOutput(category_id=None, confidence=0.0, suggested_rule=None)
 
 
-def _llm_match(category_id: int) -> _FakeMessage:
+def _llm_match(category_id: int) -> _SuggestCategoryOutput:
     """LLM returns a specific category."""
-    return _FakeMessage(
-        stop_reason="tool_use",
-        content=[_FakeToolUseBlock(
-            name="suggest_category",
-            input={"category_id": category_id, "confidence": 0.9, "suggested_rule": None},
-        )],
-    )
+    return _SuggestCategoryOutput(category_id=category_id, confidence=0.9, suggested_rule=None)
 
 
 @pytest.fixture(autouse=True)
 def mock_llm():
     """
     Default: LLM returns no match for every call.
-    This prevents any test from hitting the real Anthropic API accidentally.
-    Tests that want specific LLM behaviour can override mock_llm.return_value.
+    This prevents any test from hitting a real LLM API accidentally.
+
+    We patch get_llm and yield the .invoke mock at the tail of the
+    with_structured_output chain — so tests can still read mock_llm.call_count
+    (number of LLM calls) and set mock_llm.return_value to a structured output.
     """
-    with patch("app.services.categorize.call_llm") as m:
-        m.return_value = _llm_no_match()
-        yield m
+    with patch("app.services.categorize.get_llm") as mock_get_llm:
+        invoke = mock_get_llm.return_value.with_structured_output.return_value.invoke
+        invoke.return_value = _llm_no_match()
+        yield invoke
 
 
 client = TestClient(app, raise_server_exceptions=False)

@@ -23,7 +23,20 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # The Anthropic API key — required for all LLM calls.
+    # Which LLM provider the get_llm() factory builds by default. Keep this the
+    # single switch for "what LLM does the app use" — feature code never names a
+    # provider, so changing this (or LLM_MODEL) reroutes every feature at once.
+    # Must be a key registered in app/ai/llm.py's provider registry.
+    llm_provider: str = "groq"
+
+    # Optional global model override. Blank means "use the factory's default
+    # model for the selected provider". Set this to pin a specific model id
+    # without touching code.
+    llm_model: str = ""
+
+    # Per-provider API keys. Only the key for the active provider needs a value;
+    # the others can stay blank. Loaded from the matching env var (e.g. GROQ_API_KEY).
+    groq_api_key: str = ""
     anthropic_api_key: str = ""
 
 

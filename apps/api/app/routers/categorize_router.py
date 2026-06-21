@@ -29,7 +29,7 @@ def suggest(body: CategorizeSuggestRequest, db: Session = Depends(get_db)):
     """
     Return a category suggestion for a single transaction note.
 
-    Checks saved rules first (free, instant). Falls back to Claude Haiku only
+    Checks saved rules first (free, instant). Falls back to the LLM only
     when no rule matches. The source field in the response tells you which path
     was taken: "rule" or "llm".
     """

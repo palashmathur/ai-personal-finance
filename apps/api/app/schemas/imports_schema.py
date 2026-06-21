@@ -20,7 +20,7 @@ class PreviewRow(BaseModel):
     category_source tells you where the suggestion came from:
       "csv"  — the CSV file already had a category name that matched a DB category.
       "rule" — a saved regex rule matched the note instantly (no LLM needed).
-      "llm"  — Claude Haiku made the suggestion.
+      "llm"  — the LLM made the suggestion.
       None   — no suggestion could be made (category_id will also be None).
     """
 
