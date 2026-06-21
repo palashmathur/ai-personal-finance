@@ -751,6 +751,16 @@ All math lives in `app/services/analytics.py` as **pure functions** that take a 
 
 ### Framework choice — raw Anthropic SDK, not LangChain or LangGraph
 
+> **⚠ Decision revised in PF-22c.** We adopted LangChain after all. As of PF-22a→PF-22c, every
+> LLM call flows through a provider-agnostic `get_llm(...)` factory (`app/ai/llm.py`) built on
+> LangChain, with **LangSmith** tracing turned on for observability. Why we reversed course:
+> (1) learning LangChain is itself valuable — it's standard in real codebases; (2) multi-provider
+> routing (cheap Groq for high-volume features, Claude where quality matters) becomes a one-line
+> config switch instead of a rewrite; (3) LangSmith gives a clickable trace of every call for
+> near-zero effort. **LangGraph is still not adopted** — re-evaluated only for multi-agent Layer 5.
+> The reasoning below is kept verbatim as the original rationale — it explains *why we started*
+> on the raw SDK, which is still useful context. Don't treat it as current guidance.
+
 Honest answer: don't use LangChain. Don't reach for LangGraph yet either. Use the **Anthropic Python SDK directly** plus ~150 lines of your own agent loop. Here's the real reasoning:
 
 **Why not LangChain.**
@@ -842,12 +852,12 @@ That's it. Every feature (L1–L4) calls `run_agent` with different tools and a 
 - **Prompt caching:** wire `cache_control` on the system prompt + static context (categories list, account list, recent txn examples). 90%+ cache hit rate on categorization → ~10× cost reduction. The SDK exposes this directly.
 - **Structured output:** use **tool-use** as the structuring mechanism (`force tool_choice` to a specific tool). Don't reach for `instructor`/`outlines`/JSON-mode shims; tool-use *is* the structured-output API for Claude.
 - **Streaming:** use `client.messages.stream(...)` for the chat UI. SDK gives you raw SSE events; pipe them straight to the frontend over `text/event-stream`.
-- **Observability:** log every (`feature`, `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `latency_ms`) row to a tiny `ai_calls` SQLite table. Without this, cost regressions hide. Don't outsource to LangSmith — 30 lines of code and you own it.
+- **Observability:** log every (`feature`, `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `latency_ms`) row to a tiny `ai_calls` SQLite table. Without this, cost regressions hide. ~~Don't outsource to LangSmith~~ _(revised PF-22c: we kept the `ai_calls` table **and** turned on LangSmith — the two are complementary, not either/or. `ai_calls` is the cost ledger we own; LangSmith is the full request/response transcript for debugging.)_
 
 **TL;DR:**
 - **MVP through L4:** Anthropic SDK + your own 500-line `app/ai/`. No frameworks.
 - **L5 (multi-agent):** start hand-rolled; evaluate LangGraph if it gets messy. Don't pre-adopt.
-- **Never:** LangChain, for this app.
+- ~~**Never:** LangChain, for this app.~~ _(revised PF-22c — we adopted LangChain; see the "Decision revised in PF-22c" note at the top of this section. LangGraph is still deferred to Layer 5.)_
 
 ### Layer 1 — Auto-categorization (Week 3)
 1. Try `categorization_rules` (regex over note/merchant) first — instant, free, deterministic.
