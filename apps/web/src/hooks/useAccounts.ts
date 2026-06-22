@@ -17,3 +17,12 @@ export function useAccounts() {
     staleTime: 5 * 60_000, // accounts change rarely; cache for 5 minutes
   });
 }
+
+/**
+ * Returns a function that maps an account id to its display name. Handy in tables
+ * (holdings, trades) where rows carry account_id but we want to show the name.
+ */
+export function useAccountNameLookup() {
+  const { data } = useAccounts();
+  return (id: number) => data?.find((a) => a.id === id)?.name ?? `#${id}`;
+}
