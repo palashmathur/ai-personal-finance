@@ -1,0 +1,21 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Local env. Matches the repo convention (root .gitignore + apps/api): the live
+# .env stays out of git; the committed .env.example is the template to copy from.
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+*.local
