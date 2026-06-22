@@ -6,6 +6,7 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { queryClient } from "@/lib/queryClient";
 import { ThemeProvider } from "@/components/theme/ThemeProvider";
+import { Toaster } from "@/components/ui/sonner";
 import "./index.css";
 
 // Provider stack (outer to inner):
@@ -21,6 +22,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <App />
         </BrowserRouter>
+        {/* Toast host — lives under ThemeProvider so toasts match the theme. */}
+        <Toaster />
       </ThemeProvider>
     </QueryClientProvider>
   </React.StrictMode>
