@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
-import { Plus, Loader2 } from "lucide-react";
+import { Plus, Loader2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { TransactionsTable } from "@/components/transactions/TransactionsTable";
 import { TransactionFormDialog } from "@/components/transactions/TransactionFormDialog";
+import { CsvImportDialog } from "@/components/imports/CsvImportDialog";
 import { useTransactionMutations } from "@/hooks/useTransactionMutations";
 import { useFiltersStore } from "@/store/filters";
 import { api } from "@/lib/http";
@@ -38,6 +39,7 @@ export function Transactions() {
 
   // Dialog/confirm state.
   const [formOpen, setFormOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editing, setEditing] = useState<TransactionResponse | null>(null);
   const [deleting, setDeleting] = useState<TransactionResponse | null>(null);
 
@@ -92,14 +94,19 @@ export function Transactions() {
             Income, expenses, and transfers for the selected range.
           </p>
         </div>
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setFormOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" /> Add
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload className="h-4 w-4" /> Import CSV
+          </Button>
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setFormOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" /> Add
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -166,6 +173,9 @@ export function Transactions() {
           </Button>
         </div>
       )}
+
+      {/* CSV import flow. */}
+      <CsvImportDialog open={importOpen} onOpenChange={setImportOpen} />
 
       {/* Add / edit dialog. */}
       <TransactionFormDialog
