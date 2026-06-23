@@ -17,6 +17,7 @@ import {
 import { TransactionsTable } from "@/components/transactions/TransactionsTable";
 import { TransactionFormDialog } from "@/components/transactions/TransactionFormDialog";
 import { CsvImportDialog } from "@/components/imports/CsvImportDialog";
+import { CategorizeChip } from "@/components/transactions/CategorizeChip";
 import { useTransactionMutations } from "@/hooks/useTransactionMutations";
 import { useFiltersStore } from "@/store/filters";
 import { api } from "@/lib/http";
@@ -142,6 +143,8 @@ export function Transactions() {
                 setFormOpen(true);
               }}
               onDelete={(row) => setDeleting(row)}
+              // PF-F8: render the auto-categorize chip for uncategorized rows.
+              renderCategory={(row) => <CategorizeChip row={row} />}
             />
           )}
         </CardContent>
