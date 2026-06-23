@@ -1,6 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useMutation } from "@tanstack/react-query";
+import { Loader2, Sparkles } from "lucide-react";
 import { z } from "zod";
 
 import {
@@ -22,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { api, getApiError } from "@/lib/http";
 import { rupeesToPaise, paiseToRupees } from "@/lib/money";
 import { cleanNote, isTransfer, KIND_LABEL } from "@/lib/transactions";
 import { useAccounts } from "@/hooks/useAccounts";
@@ -126,10 +129,14 @@ export function TransactionFormDialog({
 
   const kind = watch("kind");
 
+  // Hint shown under the Category field after an auto-categorize suggestion.
+  const [suggestHint, setSuggestHint] = useState<string | null>(null);
+
   // Reset the form whenever the dialog opens or the edited row changes.
   // (Forms are uncontrolled internally; reset() is how RHF re-seeds them.)
   useEffect(() => {
     if (!open) return;
+    setSuggestHint(null);
     if (initial) {
       reset({
         kind: initialIsTransfer ? "transfer" : initial.kind,
@@ -164,6 +171,48 @@ export function TransactionFormDialog({
         : flattenCategoryOptions(categories, kind),
     [categories, kind]
   );
+
+  // --- Auto-categorize (single transaction) -------------------------------
+  // The same backend the chip + CSV preview use (POST /api/categorize/suggest):
+  // rules-first, LLM on a miss. Triggered by an explicit button (not on every
+  // keystroke) so we don't fire LLM calls — and only fills the dropdown; the user
+  // still confirms by saving. A short hint shows what was suggested + confidence.
+  const note = watch("note");
+  const amount = watch("amount");
+
+  const suggest = useMutation({
+    mutationFn: (body: { note: string; amount_minor: number }) =>
+      api.categorize.suggest({ requestBody: body }),
+    onSuccess: (s) => {
+      if (s.category_id == null) {
+        setSuggestHint("No confident suggestion — pick one manually.");
+        return;
+      }
+      // Only apply it if the suggested category matches the selected kind (its id
+      // is in the current options); otherwise the Select couldn't display it.
+      const inOptions = categoryOptions.some((o) => o.id === s.category_id);
+      if (inOptions) {
+        setValue("category_id", String(s.category_id), {
+          shouldValidate: true,
+        });
+        setSuggestHint(
+          `Suggested: ${s.category_name} (${Math.round(s.confidence * 100)}%)`
+        );
+      } else {
+        setSuggestHint(
+          `Suggested "${s.category_name}", but that's a different type — switch the type or pick manually.`
+        );
+      }
+    },
+    onError: (err) => setSuggestHint(getApiError(err).detail),
+  });
+
+  function handleSuggest() {
+    const n = note?.trim();
+    if (!n) return;
+    setSuggestHint(null);
+    suggest.mutate({ note: n, amount_minor: rupeesToPaise(Number(amount || 0)) });
+  }
 
   const onValid = handleSubmit(async (values) => {
     const amount_minor = rupeesToPaise(Number(values.amount));
@@ -236,6 +285,7 @@ export function TransactionFormDialog({
                     setValue("kind", k);
                     // Clear fields that don't apply to the new kind.
                     setValue("category_id", "");
+                    setSuggestHint(null);
                   }}
                 >
                   {KIND_LABEL[k]}
@@ -295,7 +345,24 @@ export function TransactionFormDialog({
                 <FieldError msg={errors.account_id?.message} />
               </div>
               <div className="space-y-1.5">
-                <Label>Category</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Category</Label>
+                  {/* Auto-categorize from the note. Disabled until there's a note
+                      to go on; fills the dropdown with the suggestion below. */}
+                  <button
+                    type="button"
+                    onClick={handleSuggest}
+                    disabled={!note?.trim() || suggest.isPending}
+                    className="flex items-center gap-1 text-xs text-primary hover:underline disabled:opacity-40 disabled:no-underline"
+                  >
+                    {suggest.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-3 w-3" />
+                    )}
+                    Suggest
+                  </button>
+                </div>
                 <Controller
                   control={control}
                   name="category_id"
@@ -315,6 +382,9 @@ export function TransactionFormDialog({
                   )}
                 />
                 <FieldError msg={errors.category_id?.message} />
+                {suggestHint && (
+                  <p className="text-xs text-muted-foreground">{suggestHint}</p>
+                )}
               </div>
             </div>
           )}
