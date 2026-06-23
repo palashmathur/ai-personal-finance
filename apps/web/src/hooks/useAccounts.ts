@@ -19,6 +19,20 @@ export function useAccounts() {
 }
 
 /**
+ * Same accounts, but INCLUDING archived ones — for the Accounts management page,
+ * which needs to show (and restore) archived accounts too. `archived: true` tells
+ * the backend to return everything, not just the archived rows. Separate query key
+ * (['accounts','all']) so it doesn't clobber the filter/forms list, but account
+ * mutations invalidate the ['accounts'] prefix which covers both.
+ */
+export function useAllAccounts() {
+  return useQuery({
+    queryKey: ["accounts", "all"],
+    queryFn: () => api.accounts.list({ archived: true }),
+  });
+}
+
+/**
  * Returns a function that maps an account id to its display name. Handy in tables
  * (holdings, trades) where rows carry account_id but we want to show the name.
  */

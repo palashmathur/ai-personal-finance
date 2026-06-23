@@ -3,6 +3,7 @@ import {
   LayoutDashboard,
   ArrowLeftRight,
   TrendingUp,
+  Landmark,
   Lightbulb,
   MessageSquare,
   Settings,
@@ -26,6 +27,7 @@ const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/transactions", label: "Transactions", icon: ArrowLeftRight },
   { to: "/investments", label: "Investments", icon: TrendingUp },
+  { to: "/accounts", label: "Accounts", icon: Landmark },
   // No backend endpoints for these yet (see build brief). Shown but disabled.
   { to: "/insights", label: "Insights", icon: Lightbulb, soon: true },
   { to: "/chat", label: "Chat", icon: MessageSquare, soon: true },

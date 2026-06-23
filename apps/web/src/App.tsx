@@ -4,6 +4,7 @@ import { AppShell } from "@/components/shell/AppShell";
 import { Dashboard } from "@/pages/Dashboard";
 import { Transactions } from "@/pages/Transactions";
 import { Investments } from "@/pages/Investments";
+import { Accounts } from "@/pages/Accounts";
 import { ComingSoon } from "@/pages/ComingSoon";
 
 // Route table. The parent route renders <AppShell/> (sidebar + filters + Outlet);
@@ -16,6 +17,7 @@ function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/transactions" element={<Transactions />} />
         <Route path="/investments" element={<Investments />} />
+        <Route path="/accounts" element={<Accounts />} />
         <Route
           path="/insights"
           element={<ComingSoon title="Insights" backendTicket="PF-24 / PF-33" />}

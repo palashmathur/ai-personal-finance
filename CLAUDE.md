@@ -15,7 +15,7 @@ If require suggest langgraph for AI agent workflow.
 
 **Completed tickets:** PF-1 through PF-9, PF-11 through PF-22, PF-22a, PF-22b, PF-22c (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary, CSV import backend, AI client + audit log, Generic agent loop, Tool registry, Auto-categorize endpoint, Install LangChain + LLM factory, Migrate categorize to LangChain, Enable LangSmith tracing). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
 
-**Frontend tickets done:** PF-F1–PF-F8 (Vite/React scaffold, generated TS API client, AppShell + global filter store, Transactions CRUD, Dashboard charts, Investments, CSV import, auto-categorize chip). PF-F9–F17 (NL input, advanced charts, settings, insights, chat, auth, deploy) not started — most depend on backend endpoints that don't exist yet (settings, insights, chat, NL input, auth).
+**Frontend tickets done:** PF-F1–PF-F8 + PF-F18 (Vite/React scaffold, generated TS API client, AppShell + global filter store, Transactions CRUD, Dashboard charts, Investments, CSV import, auto-categorize chip, and the **Accounts management page**). PF-F9–F17 (NL input, advanced charts, settings, insights, chat, auth, deploy) not started — most depend on backend endpoints that don't exist yet (settings, insights, chat, NL input, auth). PF-F18 was added mid-slice to fill the account add/edit/archive/delete gap (account CRUD backend PF-6 already existed).
 
 **Carried into PF-23:** the LangChain migration is functionally done — categorize runs on `get_llm(...).with_structured_output(...)` (default provider **Groq**, switchable via `LLM_PROVIDER`), and PF-22c wired in LangSmith tracing. Still outstanding: the generic agent-loop migration and the deletion of `app/ai/client.py` / `app/ai/tools.py`, **deferred to PF-23** because `run_agent` has no real caller yet and `agent.py` still depends on `call_llm` + the `Tool`/`@tool` machinery. Both stacks coexist until then.
 
@@ -65,8 +65,8 @@ personal-finance/
         components/
           ui/               # hand-authored shadcn primitives (no shadcn CLI)
           shell/            # AppShell, Sidebar, GlobalFilters
-          charts/ transactions/ investments/ imports/
-        pages/              # Dashboard, Transactions, Investments, ComingSoon
+          charts/ transactions/ investments/ imports/ accounts/
+        pages/              # Dashboard, Transactions, Investments, Accounts, ComingSoon
       scripts/gen-api-client.sh
   plans/                    # Design docs — read-only reference
   data/                     # gitignored — SQLite DB lives here
@@ -275,3 +275,4 @@ After every implementation, provide a short manual test block so the user can ve
 - **No instrument-delete endpoint** exists, so a leftover dev test instrument (`F5TEST`) may linger in `data/finance.db`'s instruments catalog. Harmless.
 - Radix `Select.Item` cannot have an empty-string `value` — use a sentinel (e.g. `"none"`) for "no selection" and map it to `null` on submit.
 - **Pages NOT built** (no backend endpoint): Insights, Chat, Settings render a `ComingSoon` stub; NL input / advanced charts / XIRR column are omitted. Don't build these until their backend ships.
+- **Accounts management (PF-F18)** is its own page at `/accounts` (`src/pages/Accounts.tsx` + `components/accounts/`). It uses `useAllAccounts()` (`GET /api/accounts?archived=true`, key `['accounts','all']`) to show archived accounts too; `useAccounts()` (key `['accounts']`, active only) still feeds the filters/forms. Account writes invalidate the `['accounts']` prefix (covers both) plus transactions/holdings/dashboard. Archive = `PATCH archived=true` (soft delete); hard `DELETE` returns 409 when referenced. Account-name uniqueness is on `(name, type)`, not name alone.
