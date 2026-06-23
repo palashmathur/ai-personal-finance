@@ -11,9 +11,11 @@ A single-user, local-first personal finance dashboard. Tracks income, expenses, 
 **Primary goal:** ship a useful tool and learn AI/GenAI hands-on using the Anthropic SDK directly.
 If require suggest langgraph for AI agent workflow.
 
-**Current phase:** Backend (Phase 1). The entire API is built and verified with Postman before any frontend code is written.
+**Current phase:** Phase 2 frontend has begun. The backend API (Phase 1) is complete and verified with Postman; the **core frontend slice (PF-F1–F8)** is now built in `apps/web` against that live API.
 
 **Completed tickets:** PF-1 through PF-9, PF-11 through PF-22, PF-22a, PF-22b, PF-22c (Repo + tooling, SQLAlchemy models, Alembic migrations, seed data, FastAPI shell, Accounts CRUD, Categories CRUD, Transactions CRUD, Postman Core APIs collection, Instruments find-or-create + search, Investment txns CRUD, Holdings service + endpoint, Dashboard endpoint, Unified ledger endpoint, Monthly cashflow summary, CSV import backend, AI client + audit log, Generic agent loop, Tool registry, Auto-categorize endpoint, Install LangChain + LLM factory, Migrate categorize to LangChain, Enable LangSmith tracing). PF-10 skipped — instruments and investment_txns tables were already created in migration 0001.
+
+**Frontend tickets done:** PF-F1–PF-F8 (Vite/React scaffold, generated TS API client, AppShell + global filter store, Transactions CRUD, Dashboard charts, Investments, CSV import, auto-categorize chip). PF-F9–F17 (NL input, advanced charts, settings, insights, chat, auth, deploy) not started — most depend on backend endpoints that don't exist yet (settings, insights, chat, NL input, auth).
 
 **Carried into PF-23:** the LangChain migration is functionally done — categorize runs on `get_llm(...).with_structured_output(...)` (default provider **Groq**, switchable via `LLM_PROVIDER`), and PF-22c wired in LangSmith tracing. Still outstanding: the generic agent-loop migration and the deletion of `app/ai/client.py` / `app/ai/tools.py`, **deferred to PF-23** because `run_agent` has no real caller yet and `agent.py` still depends on `call_llm` + the `Tool`/`@tool` machinery. Both stacks coexist until then.
 
@@ -37,7 +39,7 @@ If require suggest langgraph for AI agent workflow.
 ```
 personal-finance/
   apps/
-    api/                    # FastAPI backend — the only active app right now
+    api/                    # FastAPI backend
       app/
         routers/            # FastAPI routers — one file per resource (e.g. accounts_router.py)
         db/
@@ -51,6 +53,21 @@ personal-finance/
       tests/                # pytest test files
       pyproject.toml
       alembic.ini
+    web/                    # React frontend (Phase 2) — Vite + TS + Tailwind + shadcn/ui
+      src/
+        lib/
+          api/              # GENERATED typed client (committed; regen via npm run gen:api)
+          http.ts           # THE one HTTP wrapper: sets base URL, api facade, getApiError
+          money.ts          # THE one money util: paise <-> ₹
+          dateRange.ts      # global date-range presets
+        store/filters.ts    # Zustand global filter store (date range + accounts)
+        hooks/              # TanStack Query hooks (useAccounts, useDashboard, ...)
+        components/
+          ui/               # hand-authored shadcn primitives (no shadcn CLI)
+          shell/            # AppShell, Sidebar, GlobalFilters
+          charts/ transactions/ investments/ imports/
+        pages/              # Dashboard, Transactions, Investments, ComingSoon
+      scripts/gen-api-client.sh
   plans/                    # Design docs — read-only reference
   data/                     # gitignored — SQLite DB lives here
   Makefile
@@ -65,6 +82,17 @@ All commands run from the **project root** (where the Makefile lives).
 ```bash
 make install-api    # create .venv and install all dependencies (first-time setup)
 make api            # start the API server on port 8000 with hot reload
+make install-web    # npm install for apps/web (first-time setup; needs Node — brew install node)
+make web            # start the Vite dev server on port 5173
+make dev            # run backend + frontend together (make -j 2)
+```
+
+Frontend commands (from `apps/web/`):
+```bash
+npm run dev         # Vite dev server on :5173
+npm run typecheck   # tsc --noEmit (must stay green; runs offline)
+npm run build       # typecheck + production build
+npm run gen:api     # regenerate src/lib/api from the backend's live /openapi.json (backend must be up)
 ```
 
 Running tests (from `apps/api/`):
@@ -215,3 +243,35 @@ After every implementation, provide a short manual test block so the user can ve
 - **Unknown tool handling:** If Claude calls a tool name not in the `tools` list, `run_agent` records `{"error": "Unknown tool: <name>"}` as the result and lets Claude react, rather than crashing the whole request.
 - **Content conversion:** `_blocks_to_dicts()` converts Anthropic SDK `ContentBlock` objects to plain dicts before appending to the message history. This keeps message history as pure Python dicts throughout — no SDK types leak into `current_messages`.
 - **Agent tests:** Patch `app.ai.agent.call_llm` (not `app.ai.client.call_llm`) and use fake dataclass objects for messages — no `anthropic` import needed in test files. Create `Tool` objects directly (without `@tool`) to avoid `TOOL_REGISTRY` side effects in tests.
+
+---
+
+## Frontend conventions (Phase 2 — `apps/web`, PF-F1 onwards)
+
+**Tooling / setup**
+- **Node is required** and was not pre-installed — install via `brew install node` (Node 26+, npm 11+). `make install-web` then `make web`.
+- Stack is **locked**: Vite 5 · React **18** (pin to 18, don't let Vite pull 19) · TypeScript · **Tailwind v3** (not v4) · shadcn/ui · TanStack Query (server state) · Zustand (global filters) · react-hook-form + zod (forms) · Recharts · react-router-dom v6 · sonner (toasts).
+- **shadcn components are hand-authored** under `src/components/ui/` (no shadcn CLI was used) so they're fully in-repo and deterministic. `components.json` exists for reference.
+- npm blocks package install scripts by default (newer npm). `esbuild` is approved in `package.json` `allowScripts`; the `fsevents` warning is a harmless optional macOS dep — ignore it.
+- `tsconfig.json` sets `noUnusedLocals/Parameters: false` **on purpose** so the committed generated API client can never break `npm run typecheck`. `strict` stays on.
+- `apps/web/.env` is gitignored (repo convention); `.env.example` is committed. `VITE_API_URL` must be prefixed `VITE_` to reach client code; changing `.env` needs a dev-server restart.
+
+**THE single-source-of-truth utilities (cross-cutting rules — never bypass)**
+- **One HTTP wrapper:** `src/lib/http.ts`. Sets `OpenAPI.BASE` once, exposes the `api.<resource>.<verb>` facade over the verbose generated method names, and `getApiError()` (normalizes any throw into `{detail, code}`). The future auth wiring (PF-39: `WITH_CREDENTIALS` + 401→/login) goes **here only**. Never call raw fetch/axios or the generated services directly from a page.
+- **One money util:** `src/lib/money.ts`. Money is integer **paise** everywhere; `formatMoney`/`formatMoneyCompact` (paise→₹) and `rupeesToPaise`/`paiseToRupees` are the only paise↔₹ boundary. `Math.round` on rupees→paise guards float drift.
+- **Generated client:** `src/lib/api/` is committed. Regenerate with `npm run gen:api` (backend must be running) when the API surface changes, then update the `api` facade in `http.ts` only if a signature changed. Generator: `openapi-typescript-codegen --useOptions` → service methods take a single named-options object.
+
+**State / data**
+- **Global filters** live in the Zustand store `src/store/filters.ts` (`from`, `to`, `accountIds`, `preset`). They're folded into TanStack Query keys, so changing the date range refetches every page; mutations invalidate `['transactions']`/`['holdings']`/`['dashboard']` so charts update live.
+- **Account filter is single-id only at the backend** (`account_id`). The UI applies the filter only when **exactly one** account is selected; 0 or 2+ selected = no account filter. Documented limitation.
+- **Optimistic updates** are used for transactions (create/update/delete in `useTransactionMutations.ts`); investments just invalidate-on-success (holdings are server-computed via GROUP BY, not worth re-deriving client-side).
+- FY start month is hard-coded to April in `dateRange.ts` (TODO: read from `GET /api/settings` once PF-29 + PF-F11 exist).
+
+**Gotchas discovered**
+- **Transfers are NOT `kind: "transfer"` in responses.** The backend splits a transfer into two rows whose stored `kind` is `expense` (source) and `income` (destination), linked by a `#transfer:<uuid>` tag in the note. Detect transfers by the **note tag**, never by `kind` — see `isTransfer`/`displayKind` in `src/lib/transactions.ts`. The UI shows both halves as "Transfer" and strips the tag from the displayed note.
+- **You cannot POST an uncategorized income/expense** — the backend requires a category. Uncategorized rows only arise from CSV import (confirm with `category_id: null`) or category deletion (`ON DELETE SET NULL`). The auto-categorize chip (PF-F8) targets exactly those rows and skips transfers.
+- **`TransactionUpdate` has no `kind` or `account_id`** — editing can't change either; the form disables kind and account in edit mode. Transfer accounts can't be re-routed via PATCH (delete + re-create).
+- **CSV confirm uses ONE account for all rows** (top-level `account_id`), category is per row — so the import dialog has a single account selector, not per-row accounts (despite the original AC wording).
+- **No instrument-delete endpoint** exists, so a leftover dev test instrument (`F5TEST`) may linger in `data/finance.db`'s instruments catalog. Harmless.
+- Radix `Select.Item` cannot have an empty-string `value` — use a sentinel (e.g. `"none"`) for "no selection" and map it to `null` on submit.
+- **Pages NOT built** (no backend endpoint): Insights, Chat, Settings render a `ComingSoon` stub; NL input / advanced charts / XIRR column are omitted. Don't build these until their backend ships.
