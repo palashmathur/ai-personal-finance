@@ -1,16 +1,17 @@
 import { Toaster as Sonner } from "sonner";
 
 import { useTheme } from "@/components/theme/ThemeProvider";
+import { sonnerTheme } from "@/lib/themes";
 
 // Toast host. Sonner renders a single <Toaster/> near the root; anywhere in the
-// app you call toast.success(...) / toast.error(...) and it shows here. We pass
-// the current theme so toasts match light/dark mode.
+// app you call toast.success(...) / toast.error(...) and it shows here. Sonner only
+// understands light/dark/system, so we map our extra palettes onto the closest one.
 export function Toaster() {
   const { theme } = useTheme();
 
   return (
     <Sonner
-      theme={theme}
+      theme={sonnerTheme(theme)}
       className="toaster group"
       position="top-right"
       richColors

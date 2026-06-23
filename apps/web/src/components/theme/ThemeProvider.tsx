@@ -1,16 +1,21 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
-// Dark-mode provider (the standard shadcn pattern). It keeps a "theme" value in
-// React context + localStorage and toggles the `light`/`dark` class on <html>.
-// Tailwind's darkMode:["class"] (tailwind.config.js) then repaints everything via
-// the CSS variables in index.css. Context here is React's built-in dependency
-// injection — provide a value at the top, read it anywhere below with a hook.
+import {
+  ALL_THEME_CLASSES,
+  resolveTheme,
+  THEME_CLASSES,
+  type ThemeName,
+} from "@/lib/themes";
 
-type Theme = "dark" | "light" | "system";
+// Theme provider. Holds the selected theme in React context + localStorage and
+// applies the right CSS class(es) to <html> (see themes.ts for the mapping). The
+// CSS variables in index.css then repaint the whole app — no component changes.
+// Context here is React's built-in dependency injection: provide a value at the
+// top, read it anywhere below with the useTheme() hook.
 
 type ThemeProviderState = {
-  theme: Theme;
-  setTheme: (theme: Theme) => void;
+  theme: ThemeName;
+  setTheme: (theme: ThemeName) => void;
 };
 
 const ThemeProviderContext = createContext<ThemeProviderState>({
@@ -24,28 +29,30 @@ export function ThemeProvider({
   storageKey = "pf-theme",
 }: {
   children: React.ReactNode;
-  defaultTheme?: Theme;
+  defaultTheme?: ThemeName;
   storageKey?: string;
 }) {
-  const [theme, setThemeState] = useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
+  const [theme, setThemeState] = useState<ThemeName>(
+    () => (localStorage.getItem(storageKey) as ThemeName) || defaultTheme
   );
 
-  // Whenever theme changes, sync the class on the root element. "system" follows
-  // the OS preference via the prefers-color-scheme media query.
+  // Apply the theme's class(es) whenever it changes. When set to "system" we also
+  // subscribe to OS light/dark changes so the app follows them live.
   useEffect(() => {
     const root = window.document.documentElement;
-    root.classList.remove("light", "dark");
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
 
+    const apply = () => {
+      root.classList.remove(...ALL_THEME_CLASSES);
+      const concrete = resolveTheme(theme, mql.matches);
+      THEME_CLASSES[concrete].forEach((c) => root.classList.add(c));
+    };
+
+    apply();
     if (theme === "system") {
-      const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-        .matches
-        ? "dark"
-        : "light";
-      root.classList.add(systemTheme);
-      return;
+      mql.addEventListener("change", apply);
+      return () => mql.removeEventListener("change", apply);
     }
-    root.classList.add(theme);
   }, [theme]);
 
   const value: ThemeProviderState = {
