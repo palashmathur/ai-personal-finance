@@ -567,6 +567,20 @@ PF-F1 through PF-F4
 - Toast on success/error. Empty state with CTA.
 **Deps:** PF-F3.
 
+#### PF-F18 — Accounts management page  *(added mid Phase 2 — see note on PF-F11)*
+**Goal:** Dedicated CRUD UI for accounts. The core slice (PF-F1–F8) only *consumed* accounts (filters, forms) and relied on seeded rows; there was no way to add/rename/archive/delete an account. This ticket fills that gap with its own page rather than waiting for the Settings page (PF-F11).
+**AC:**
+- Dedicated **Accounts** sidebar entry + `/accounts` route (a real page, not a "coming soon" stub).
+- Table of **all** accounts including archived ones (`GET /api/accounts?archived=true`): name, type, opening balance (₹), Active/Archived status. Archived rows are dimmed.
+- "Add account" dialog (react-hook-form + zod): name, type (`cash | bank | broker | wallet | credit_card`), opening balance (≥ 0). `POST /api/accounts`.
+- Inline **edit** of name / type / opening balance via `PATCH /api/accounts/{id}`.
+- **Archive / restore** toggle (`PATCH archived=true|false`) — the soft-delete path.
+- **Hard delete** with a confirm dialog (`DELETE /api/accounts/{id}`); surfaces the backend's 409 (`code: "conflict"`, "referenced by transactions/trades — archive instead") via a toast.
+- Toasts on success/error. Account writes invalidate `['accounts']`, `['transactions']` (denormalized `account_name`), `['holdings']`, and `['dashboard']` (opening balances feed net worth).
+- Note: duplicate-name handling is backend-driven — uniqueness is on `(name, type)`, so the same name with a different type is allowed; a true duplicate returns 409 and the UI toasts it.
+**Deps:** PF-F3.
+**Status:** Done.
+
 ---
 
 ### Frontend Group 2 — Investments + Dashboard
@@ -637,6 +651,7 @@ PF-F10 through PF-F12
 
 #### PF-F11 — Settings page
 **Goal:** Edit FY start month, allocation targets; drift indicator on donut.
+> Note: **account management** was originally implied to live here ("Settings → Accounts" in the design doc). It has been split out into its own ticket **PF-F18** and is already built, so this ticket is now scoped to FY start month + allocation targets only (and still needs the `GET/PATCH /api/settings` backend, PF-29).
 **AC:**
 - FY start month select (Jan / Apr); saves to `PATCH /api/settings`.
 - Per-asset-class target percentage inputs; sum-to-100 validation in UI; saves.
@@ -771,6 +786,7 @@ PF-F15 through PF-F17
 | PF-F15 | Auth UI | Frontend G6 |
 | PF-F16 | Docker + static serving | Frontend G6 |
 | PF-F17 | Deploy | Frontend G6 |
+| PF-F18 | Accounts management page | Frontend G1 |
 
 ---
 
@@ -809,6 +825,7 @@ PF-9, PF-18, PF-25, PF-31, PF-34, PF-37, PF-41 → PF-42
 
 Phase 2 (Frontend, starts after PF-42):
 PF-1 → PF-F1 → PF-F2 → PF-F3 → PF-F4 → PF-F7, PF-F8
+                          PF-F3 → PF-F18 (accounts management)
                           PF-F3 → PF-F5 → PF-F10
                           PF-F3 → PF-F6 → PF-F9, PF-F10, PF-F11, PF-F12, PF-F13
                           PF-F3 → PF-F14

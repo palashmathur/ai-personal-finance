@@ -1,0 +1,165 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  shadcn/ui theme tokens. Every color in tailwind.config.js points at one of
+  these CSS variables. The `:root` block is the light theme; `.dark` overrides
+  the same names. Toggling the `dark` class on <html> (see ThemeProvider, PF-F3)
+  swaps the whole palette with zero component changes — the React analogy is a
+  single context value flipping a CSS theme, not re-rendering styled components.
+*/
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+  }
+
+  /* --- Soft / soothing palettes (PF theme picker) -------------------------
+     Each is a full token set, defined AFTER :root and .dark so it wins on ties.
+     Paper / Sand / Sage are light palettes (no `dark` class). Dim is applied
+     together with `dark` (see themes.ts) so it only WARMS the dark palette. */
+
+  /* Warm off-white "paper" — gentle, slightly cream, low glare. */
+  .theme-paper {
+    --background: 40 33% 98%;
+    --foreground: 30 12% 20%;
+    --card: 40 33% 99%;
+    --card-foreground: 30 12% 20%;
+    --popover: 40 33% 99%;
+    --popover-foreground: 30 12% 20%;
+    --primary: 28 30% 30%;
+    --primary-foreground: 40 33% 98%;
+    --secondary: 40 22% 92%;
+    --secondary-foreground: 30 12% 25%;
+    --muted: 40 20% 92%;
+    --muted-foreground: 35 8% 45%;
+    --accent: 40 25% 89%;
+    --accent-foreground: 30 12% 25%;
+    --destructive: 0 65% 47%;
+    --destructive-foreground: 40 33% 98%;
+    --border: 40 20% 87%;
+    --input: 40 20% 87%;
+    --ring: 28 30% 30%;
+  }
+
+  /* Beige "sand" — warmer and a touch deeper than paper. */
+  .theme-sand {
+    --background: 38 38% 93%;
+    --foreground: 28 18% 22%;
+    --card: 38 40% 96%;
+    --card-foreground: 28 18% 22%;
+    --popover: 38 40% 96%;
+    --popover-foreground: 28 18% 22%;
+    --primary: 24 35% 34%;
+    --primary-foreground: 38 40% 96%;
+    --secondary: 38 28% 87%;
+    --secondary-foreground: 28 18% 26%;
+    --muted: 38 26% 87%;
+    --muted-foreground: 30 12% 42%;
+    --accent: 34 32% 84%;
+    --accent-foreground: 28 18% 26%;
+    --destructive: 0 62% 48%;
+    --destructive-foreground: 38 40% 96%;
+    --border: 38 24% 80%;
+    --input: 38 24% 80%;
+    --ring: 24 35% 34%;
+  }
+
+  /* Soft "sage" green — calming, very low saturation. */
+  .theme-sage {
+    --background: 100 16% 95%;
+    --foreground: 150 14% 19%;
+    --card: 100 20% 97%;
+    --card-foreground: 150 14% 19%;
+    --popover: 100 20% 97%;
+    --popover-foreground: 150 14% 19%;
+    --primary: 150 25% 32%;
+    --primary-foreground: 100 20% 97%;
+    --secondary: 110 16% 89%;
+    --secondary-foreground: 150 14% 24%;
+    --muted: 110 14% 89%;
+    --muted-foreground: 145 9% 40%;
+    --accent: 120 18% 85%;
+    --accent-foreground: 150 14% 24%;
+    --destructive: 0 62% 48%;
+    --destructive-foreground: 100 20% 97%;
+    --border: 110 14% 83%;
+    --input: 110 14% 83%;
+    --ring: 150 25% 32%;
+  }
+
+  /* "Dim" — a warm, low-contrast dark (applied on top of .dark). Easier on the
+     eyes at night than the near-black default Dark theme. */
+  .theme-dim {
+    --background: 30 8% 13%;
+    --foreground: 40 18% 88%;
+    --card: 30 8% 16%;
+    --card-foreground: 40 18% 88%;
+    --popover: 30 8% 15%;
+    --popover-foreground: 40 18% 88%;
+    --primary: 38 32% 76%;
+    --primary-foreground: 30 12% 14%;
+    --secondary: 30 6% 23%;
+    --secondary-foreground: 40 18% 88%;
+    --muted: 30 6% 22%;
+    --muted-foreground: 40 9% 62%;
+    --accent: 30 7% 26%;
+    --accent-foreground: 40 18% 88%;
+    --destructive: 0 58% 46%;
+    --destructive-foreground: 40 18% 92%;
+    --border: 30 7% 25%;
+    --input: 30 7% 25%;
+    --ring: 38 32% 76%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
