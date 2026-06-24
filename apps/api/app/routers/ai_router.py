@@ -11,8 +11,26 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import AICall
 from app.schemas.ai_schema import FeatureUsageSummary, UsageResponse
+from app.schemas.nl_input_schema import NLEntryResponse, NLInputRequest
+from app.services import nl_input as nl_input_svc
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+
+@router.post("/nl-input", response_model=NLEntryResponse)
+def nl_input(nl_input_request: NLInputRequest, db: Session = Depends(get_db)):
+    """
+    Parse a natural-language sentence into a draft transaction.
+
+    Send a sentence like "spent 1200 on groceries at DMart yesterday" plus the
+    account to fall back to when none is named. You get back a fully resolved draft
+    (amount in paise, ISO date, account/category IDs) ready for a confirm card.
+
+    This does NOT save anything — the frontend shows the draft, the user confirms or
+    edits, then POSTs to /api/transactions. Returns 422 if no amount is found in the
+    text or the default account doesn't exist.
+    """
+    return nl_input_svc.parse_nl_entry(db, nl_input_request)
 
 
 @router.get("/usage", response_model=UsageResponse)

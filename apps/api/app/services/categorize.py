@@ -72,13 +72,26 @@ def suggest(note: str, amount_minor: int, db: Session) -> CategorizeSuggestRespo
     no rule matches. The LLM call uses with_structured_output, so we always
     get a validated _SuggestCategoryOutput back — not free text.
     """
-    rules = _load_rules(db)
-    rule_match = _match_rule(note, rules, db)
+    rule_match = suggest_from_rules(note, db)
     if rule_match:
         return rule_match
 
     categories = _load_categories(db)
     return _suggest_with_llm(note, amount_minor, categories)
+
+
+def suggest_from_rules(note: str, db: Session) -> Optional[CategorizeSuggestResponse]:
+    """
+    Try ONLY the saved regex rules — never calls the LLM.
+
+    Returns a response on the first rule that matches the note (source="rule"),
+    or None if no rule fires. This is the cheap, deterministic half of suggest():
+    callers that have already asked an LLM for a category (e.g. NL input, which
+    shows the model the same category list) use this to pick up the user's learned
+    rules without paying for a second, redundant LLM call.
+    """
+    rules = _load_rules(db)
+    return _match_rule(note, rules, db)
 
 
 def suggest_batch(
@@ -241,7 +254,7 @@ def _suggest_with_llm(
     # list. Kept provider-agnostic on purpose — no provider-specific hints (e.g.
     # prompt-cache markers) leak into feature code; that's the factory's concern.
     system = SystemMessage(
-        content=f"{_SYSTEM_PROMPT}\n\n{_format_categories(categories)}"
+        content=f"{_SYSTEM_PROMPT}\n\n{format_categories(categories)}"
     )
     human = HumanMessage(
         content=(
@@ -262,9 +275,12 @@ def _suggest_with_llm(
     )
 
 
-def _format_categories(categories: list[Category]) -> str:
+def format_categories(categories: list[Category]) -> str:
     """
     Format the category list as a stable string for the LLM system prompt.
+
+    Public + shared: both the categorize and nl_input features describe the category
+    list to the model with this exact format, so there's one place to change it.
 
     Stable = same categories always produce the same string, so the prompt
     cache stays valid across calls. We include the ID (what the LLM must return),
