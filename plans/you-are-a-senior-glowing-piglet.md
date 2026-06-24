@@ -6,7 +6,7 @@ You want a single-user, local-first personal finance dashboard that tracks **inc
 
 **Locked decisions (from clarifying Qs):**
 - **Stack:** React (Vite) + TypeScript on the frontend, **Python FastAPI** on the backend, **SQLite** for storage.
-- **AI provider:** Anthropic **Claude API** (Python SDK), with prompt caching.
+- **AI provider:** provider-agnostic via LangChain's `get_llm` factory — default **Groq**, switchable via `LLM_PROVIDER` (no provider/model named outside the factory + config).
 - **Currency:** **INR-only.** Every monetary value is stored as an integer `amount_minor` (paise). No `currency` or `fx_rate` columns anywhere. Multi-currency can be added later by introducing those columns and a migration — for now, it's pure clutter.
 - **Auth:** skip in MVP, add **Google OAuth via Authlib** (FastAPI) + httpOnly session cookies before deploy. No `user_id` columns in MVP — added in the auth migration.
 
@@ -95,8 +95,8 @@ You want a single-user, local-first personal finance dashboard that tracks **inc
                                         │   SQLite (file)  │
                                         │                  │
                                         │  ┌────────────┐  │
-                                        │  │ Anthropic  │──┼──► api.anthropic.com
-                                        │  │ SDK        │  │
+                                        │  │ LangChain  │──┼──► LLM provider
+                                        │  │ get_llm    │  │   (default: Groq)
                                         │  └────────────┘  │
                                         │  ┌────────────┐  │
                                         │  │ Chroma     │  │  (local vector store
@@ -148,8 +148,8 @@ You want a single-user, local-first personal finance dashboard that tracks **inc
       categorize.py    # rule-based + LLM categorization
       pricing.py       # holding valuations
     ai/
-      client.py        # Anthropic client + prompt cache config
-      tools.py         # tool definitions for tool-use
+      llm.py           # provider-agnostic get_llm factory + provider registry
+      audit.py         # AuditCallbackHandler → ai_calls
       rag.py           # retrieval over Chroma
       prompts/         # *.md system prompts
     db/
@@ -749,133 +749,53 @@ All math lives in `app/services/analytics.py` as **pure functions** that take a 
 
 **Core principle: numbers are computed in Python, the LLM only narrates and routes.** The LLM never adds, percentages, or invents amounts. This avoids the #1 failure mode of finance-LLM apps.
 
-### Framework choice — raw Anthropic SDK, not LangChain or LangGraph
+### Framework choice — LangChain via a provider-agnostic `get_llm` factory
 
-> **⚠ Decision revised in PF-22c.** We adopted LangChain after all. As of PF-22a→PF-22c, every
-> LLM call flows through a provider-agnostic `get_llm(...)` factory (`app/ai/llm.py`) built on
-> LangChain, with **LangSmith** tracing turned on for observability. Why we reversed course:
-> (1) learning LangChain is itself valuable — it's standard in real codebases; (2) multi-provider
-> routing (cheap Groq for high-volume features, Claude where quality matters) becomes a one-line
-> config switch instead of a rewrite; (3) LangSmith gives a clickable trace of every call for
-> near-zero effort. **LangGraph is still not adopted** — re-evaluated only for multi-agent Layer 5.
-> The reasoning below is kept verbatim as the original rationale — it explains *why we started*
-> on the raw SDK, which is still useful context. Don't treat it as current guidance.
+Every LLM call goes through `app/ai/llm.py::get_llm(feature, model=None, provider=None, max_tokens=4096)`, which returns a LangChain `BaseChatModel`. Default provider is **Groq** (switchable via `LLM_PROVIDER`); no feature imports a provider SDK directly. The factory is the *only* place a concrete provider/model is named — feature code, services, and tests say "the LLM."
 
-Honest answer: don't use LangChain. Don't reach for LangGraph yet either. Use the **Anthropic Python SDK directly** plus ~150 lines of your own agent loop. Here's the real reasoning:
+**Why LangChain:** (1) learning it is valuable — it's standard in real codebases; (2) provider routing (a cheap model for high-volume features like categorize, a stronger model where quality matters) is a one-line config switch, not a rewrite; (3) **LangSmith** gives a clickable trace of every call for near-zero effort. **LangGraph is still not adopted** — re-evaluated only for the multi-agent Layer 5, where parallel agents with a supervisor is the use case it's built for.
 
-**Why not LangChain.**
-- It's a wrapper around the SDK that adds 5–10× more code paths than you actually need. Tracing a bug means stepping through `BaseChatModel → ChatAnthropic → _generate → _create_message_dicts → ...` instead of reading one `client.messages.create(...)` call.
-- API has churned aggressively (LCEL → Runnables → "v0.3 architecture") — stuff you write today rots in 6 months.
-- Hides the wire format. **Tool-use, prompt caching, streaming, citations** — the things that actually matter for cost/quality — are exactly what you need to *see* and tune. Wrapping them is a tax.
-- You said the *primary reason* for this project is to learn AI. LangChain teaches you LangChain. The SDK teaches you Claude — tool-use schemas, cache breakpoints, stop reasons, message blocks. That knowledge transfers; LangChain knowledge doesn't.
-- The pattern in production: many teams adopt LangChain early, hit a wall on observability/cost, and rip it out. Skip step 1.
-
-**Why not LangGraph yet.**
-- LangGraph is a real and decent thing — it's a state-machine for multi-agent workflows, more focused than LangChain. The graph abstraction is genuinely useful when you have **>2 cooperating agents with persisted state across many turns** and want checkpointing, branching, human-in-the-loop, etc.
-- Your Layers 1–4 (categorize, NL input, RAG insights, chat) are **single-agent or single-call** tasks. A graph framework here is overkill — like using Kafka to deliver one log line.
-- Layer 5 (multi-agent investment analysis) *could* justify LangGraph. But a hand-rolled coordinator/sub-agent pattern in plain Python is **150–300 lines** and gives you full control. Decide then, not now. If your custom orchestrator gets messy by the time you're building L5, LangGraph is a defensible upgrade — port at that point with a clear "we needed this because X" reason. Don't pre-adopt.
-
-**What you build instead — `app/ai/` directly on the SDK:**
+**`app/ai/` + services layout (current):**
 
 ```
-app/ai/
-  client.py           # Anthropic client, model picker, prompt-cache wiring (~40 lines)
-  agent.py            # generic tool-use loop: call → execute tools → loop until stop_reason='end_turn' (~80 lines)
-  tools.py            # @tool decorator + registry; defines schemas for create_expense, query_txns, get_holdings, ... (~100 lines)
-  rag.py              # Chroma index/retrieve helpers (~60 lines)
-  prompts/            # *.md system prompts versioned in git
-    categorize.md
-    nl_input.md
-    insights.md
-    chat_advisor.md
-    investment_analyst.md
-  features/
-    categorize.py     # business logic for L1
-    nl_input.py       # L2
-    insights.py       # L3
-    chat.py           # L4
-    investment.py     # L5 (multi-agent — implemented when we get there)
+app/
+  ai/
+    llm.py            # get_llm factory + provider registry (only place a provider/model is named)
+    audit.py          # AuditCallbackHandler — writes one ai_calls row per call
+    rag.py            # Chroma index/retrieve helpers (Layer 3)
+    prompts/          # *.md system prompts versioned in git
+  services/
+    categorize.py     # L1 — rules-first, then get_llm(...).with_structured_output(...)
+    nl_input.py       # L2 — single-shot structured extraction
+    insights.py       # L3 — facts in Python, get_llm(...) narrates
+    chat.py           # L4 — get_llm(...).bind_tools([...]) + streaming
 ```
 
-The whole AI layer is ~500 lines of code you actually own and understand.
+**Key patterns:**
+- **Structured output (L1/L2):** `get_llm(...).with_structured_output(PydanticModel).invoke([...])` — LangChain forces the tool/JSON schema and returns a validated model. No hand-rolled tool schemas, no `instructor`/`outlines` shims.
+- **Autonomous tool-use (L4 chat):** define tools with `langchain_core.tools.tool` and bind them via `get_llm(...).bind_tools([...])`. There is no custom agent loop or tool registry.
+- **Streaming (L4):** LangChain streaming (`astream_events`) piped straight to `text/event-stream`.
+- **Observability (two layers, both free):** the `ai_calls` SQLite table (our own cost ledger — `feature`, `model`, token counts, `latency_ms` — written by the audit callback inside `get_llm`) **and** LangSmith traces (the full request/response transcript, auto-emitted from `LANGCHAIN_*` env vars, tagged by feature). `ai_calls` is the cost ledger we own; LangSmith is for debugging "what was said."
 
-**The agent loop you'll write (sketch):**
-
-```python
-# app/ai/agent.py
-async def run_agent(
-    messages: list[dict],
-    system: str,
-    tools: list[Tool],
-    *,
-    model: str,
-    max_steps: int = 8,
-) -> AgentResult:
-    """
-    Generic tool-use loop. Returns final assistant message + every tool call made
-    + token usage (so we can audit cost per feature).
-    """
-    history = list(messages)
-    steps = []
-    for _ in range(max_steps):
-        resp = await client.messages.create(
-            model=model,
-            system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-            tools=[t.schema for t in tools],
-            messages=history,
-            max_tokens=4096,
-        )
-        history.append({"role": "assistant", "content": resp.content})
-        if resp.stop_reason != "tool_use":
-            return AgentResult(final=resp, steps=steps, usage=resp.usage)
-
-        tool_results = []
-        for block in resp.content:
-            if block.type == "tool_use":
-                result = await tools_by_name[block.name].run(**block.input)
-                steps.append((block.name, block.input, result))
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(result, default=str),
-                })
-        history.append({"role": "user", "content": tool_results})
-
-    raise AgentError("max_steps exceeded")
-```
-
-That's it. Every feature (L1–L4) calls `run_agent` with different tools and a different system prompt. **Reading this once tells you exactly how the system behaves. LangChain hides the equivalent loop behind 12 classes.**
-
-**For multi-agent (L5) when we get there:** a `Coordinator` agent has tools that *invoke other agents* (`call_portfolio_analyzer`, `call_risk_assessor`, `call_news_summarizer`). Each sub-agent is its own `run_agent` call with its own narrow tools. Communication is structured JSON via tool-results. ~200 lines on top of `agent.py`. **Re-evaluate LangGraph at that point** — by then you'll know exactly what you need from a graph framework, and you'll be able to compare against your hand-rolled version with informed eyes.
-
-**What you do *not* skimp on by going raw-SDK:**
-- **Prompt caching:** wire `cache_control` on the system prompt + static context (categories list, account list, recent txn examples). 90%+ cache hit rate on categorization → ~10× cost reduction. The SDK exposes this directly.
-- **Structured output:** use **tool-use** as the structuring mechanism (`force tool_choice` to a specific tool). Don't reach for `instructor`/`outlines`/JSON-mode shims; tool-use *is* the structured-output API for Claude.
-- **Streaming:** use `client.messages.stream(...)` for the chat UI. SDK gives you raw SSE events; pipe them straight to the frontend over `text/event-stream`.
-- **Observability:** log every (`feature`, `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `latency_ms`) row to a tiny `ai_calls` SQLite table. Without this, cost regressions hide. ~~Don't outsource to LangSmith~~ _(revised PF-22c: we kept the `ai_calls` table **and** turned on LangSmith — the two are complementary, not either/or. `ai_calls` is the cost ledger we own; LangSmith is the full request/response transcript for debugging.)_
-
-**TL;DR:**
-- **MVP through L4:** Anthropic SDK + your own 500-line `app/ai/`. No frameworks.
-- **L5 (multi-agent):** start hand-rolled; evaluate LangGraph if it gets messy. Don't pre-adopt.
-- ~~**Never:** LangChain, for this app.~~ _(revised PF-22c — we adopted LangChain; see the "Decision revised in PF-22c" note at the top of this section. LangGraph is still deferred to Layer 5.)_
+**Multi-agent (L5), when we get there:** a coordinator invokes specialist sub-agents in parallel. Start hand-rolled in plain Python; **re-evaluate LangGraph at that point** — by then you'll know exactly what you need from a graph framework. Don't pre-adopt.
 
 ### Layer 1 — Auto-categorization (Week 3)
 1. Try `categorization_rules` (regex over note/merchant) first — instant, free, deterministic.
-2. On miss, call Claude Haiku with: `{note, amount, account, recent 5 categorizations}` → returns `category_id` + confidence + suggested rule.
+2. On miss, call the LLM (a fast, cheap model) with `{note, amount, account, recent 5 categorizations}` → returns `category_id` + confidence + suggested rule.
 3. If confidence > 0.8, auto-apply; else show a "Suggested: Groceries" chip the user clicks to accept (which also writes a new rule).
-4. Use **prompt caching** on the system prompt + category list (changes rarely, hits every call).
+4. The system prompt + category list change rarely — keep them stable so each call stays cheap.
 
 ### Layer 2 — Natural language input (Week 3)
 - Single text box: `"spent 450 on uber back from airport yesterday"` →
-- Claude Sonnet with **tool-use**: tool `create_expense(amount_minor, category_id, account_id, occurred_on, note)`.
+- The LLM via **structured output** (`get_llm(...).with_structured_output(...)`) → `{kind, amount_minor, category_id, account_id, occurred_on, note}`.
 - Frontend shows the parsed result as a confirm card before commit (NL is high-leverage but error-prone — never silently insert).
 
 ### Layer 3 — Insights with RAG (Week 5–6)
-- **Indexer (background job):** for each new txn / monthly summary / holding change, write a short text chunk like `"2026-04-12: ₹4,200 expense in Dining (Restaurant: Toit) from HDFC Credit"` and embed via Anthropic's `voyage-3` (or whichever embedder you pick — keep it abstracted). Store vectors in Chroma, pointer in `embeddings_meta`.
+- **Indexer (background job):** for each new txn / monthly summary / holding change, write a short text chunk like `"2026-04-12: ₹4,200 expense in Dining (Restaurant: Toit) from HDFC Credit"` and embed via an embedding model (keep it abstracted). Store vectors in Chroma, pointer in `embeddings_meta`.
 - **Insight generator:**
   1. Compute deterministic facts in Python (top 5 spending changes MoM, drift values, savings-rate delta).
   2. Retrieve top-K relevant historical chunks.
-  3. Send to Claude Sonnet: `{facts, retrieved_context, system_prompt}` → narrated insight.
+  3. Send to the LLM: `{facts, retrieved_context, system_prompt}` → narrated insight.
   4. Cache result in `insights` table keyed on `(user_id, period, kind)`.
 - Surface in `/insights` page as cards; pin the 3 most actionable on the dashboard.
 
@@ -886,14 +806,12 @@ That's it. Every feature (L1–L4) calls `run_agent` with different tools and a 
   - `get_holdings(as_of)`, `get_allocation()`, `compute_xirr(instrument_id)`
   - `propose_rebalance(target)` — returns suggested moves, does *not* execute
 - System prompt: persona = "cautious analyst, only states what data shows, refuses to give regulated advice."
-- Use prompt caching on the conversation prefix; thread persisted in `chat_threads` (add when this phase lands).
+- Thread persisted in `chat_threads` (added when this phase lands).
 
 ### Provider design
-- One `app/ai/client.py` wraps the Anthropic SDK. All callers go through it. Models picked per call site:
-  - Categorization → `claude-haiku-4-5` (cheap, fast).
-  - NL input + insights + chat → `claude-sonnet-4-6`.
-  - Reserve `claude-opus-4-7` for "deep analysis" buttons the user explicitly triggers.
-- Always use `cache_control` on the system prompt + static context (categories, account list).
+- All LLM calls go through `app/ai/llm.py::get_llm(feature, model=None, provider=None)` — a provider-agnostic LangChain factory. Default provider is **Groq**, switchable via `LLM_PROVIDER`; the concrete provider/model is named only in the factory + config, never at call sites.
+- Per-feature intent (chosen via config, not hard-coded in features): a fast/cheap model for high-volume routing (categorize), a stronger model for narration/reasoning (NL input, insights, chat), a frontier model only for explicit "deep analysis" triggers.
+- Every call is audited to `ai_calls` (cost ledger) and traced to LangSmith automatically, via the factory.
 
 ---
 
@@ -919,9 +837,9 @@ That's it. Every feature (L1–L4) calls `run_agent` with different tools and a 
 **Done when:** import a month of CSV, see four charts populated.
 
 ### Week 3 — AI Layer 1+2
-- `app/ai/client.py` with Anthropic SDK + prompt caching.
-- `categorization_rules` + Claude-Haiku fallback for unrecognized txns.
-- NL input box on Dashboard → tool-use → confirm card → insert.
+- `app/ai/llm.py::get_llm` factory (LangChain) + `ai_calls` audit.
+- `categorization_rules` + LLM fallback for unrecognized txns.
+- NL input box on Dashboard → structured output → confirm card → insert.
 - Insights stub: deterministic only ("savings rate this month: X%, MoM delta: Y").
 
 **Done when:** typing "spent 500 on lunch today" creates a categorized expense after one confirm click.

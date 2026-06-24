@@ -17,15 +17,15 @@ You don't have to pick from a dropdown every time.
 
 ### How it learns
 - First, it tries your saved rules (e.g. "Swiggy" always = Dining Out)
-- If no rule matches, it asks Claude Haiku (fastest, cheapest model)
+- If no rule matches, it asks a fast, cheap model (fastest, cheapest model)
 - You confirm or correct → that correction becomes a new rule
 - Over time, 90%+ of entries need zero AI calls — rules handle them
 
 ### Models used
-- Claude Haiku (only when no rule matches)
+- a fast, cheap model (only when no rule matches)
 
-### Prompt caching benefit
-The category list + system prompt is cached — so every Haiku call after the first one is ~10× cheaper
+### Why it stays cheap
+Rules handle 90%+ of entries with no LLM call at all; when the model is needed it's a fast, cheap one and the prompt (system + category list) is small and stable.
 
 ---
 
@@ -42,7 +42,7 @@ The app turns it into a proper transaction — no form filling.
 > "bought coffee for 180 at Blue Tokai this morning"
 
 ### How it works
-- Claude Sonnet reads your sentence using **tool-use**
+- a stronger model reads your sentence using **tool-use**
 - Tool-use means: the AI doesn't just reply in text — it fills in a structured form (`amount`, `category`, `account`, `date`, `note`)
 - A **confirm card** appears before anything is saved — you see what it parsed and can edit
 - You hit Save → transaction is created
@@ -53,7 +53,7 @@ Think of it like the AI calling a specific method:
 The AI doesn't write free text — it fills in typed fields.
 
 ### Models used
-- Claude Sonnet (better at parsing ambiguous language than Haiku)
+- a stronger model (better at parsing ambiguous language than the categorize model)
 
 ---
 
@@ -77,14 +77,14 @@ Plain English: before the AI writes anything, it first reads your actual transac
 ### How it works
 1. Python computes the **facts** first (exact numbers, percentages, deltas)
 2. The app retrieves relevant past months from your history (the "R" in RAG)
-3. Claude Sonnet writes the insight using only those facts — never invents numbers
+3. a stronger model writes the insight using only those facts — never invents numbers
 4. Results are cached so you're not billed every page load
 
 ### Key rule
 The AI only narrates. Python does the math. If the insight says "₹3,800 higher" — that number came from a Python function, not the AI's guess.
 
 ### Models used
-- Claude Sonnet (for insight generation)
+- a stronger model (for insight generation)
 - Embedding model (to index and retrieve past transactions)
 
 ### Storage
@@ -118,7 +118,7 @@ The app answers using your real data — not generic financial advice.
 > App: "I can show you your current HDFC Bank position and all the numbers — but advising whether to buy or sell is a regulated decision I can't make for you."
 
 ### How it works
-- Claude Sonnet with **read-only tools** — the AI can query your DB but cannot write to it
+- a stronger model with **read-only tools** — the AI can query your DB but cannot write to it
 - Tools available to the AI: `query_transactions`, `get_holdings`, `get_allocation`, `compute_xirr`, `get_monthly_summary`
 - Multi-turn: the chat remembers context across messages in a thread
 - Streaming: response appears word by word, like ChatGPT
@@ -128,7 +128,7 @@ The AI session uses a read-only database connection.
 Physically cannot insert, update, or delete anything.
 
 ### Models used
-- Claude Sonnet (streaming, tool-use)
+- a stronger model (streaming, tool-use)
 
 ---
 
@@ -204,7 +204,7 @@ You: "Research HDFC Bank"
   Result shown to you (~30–60 seconds)
 ```
 
-Each "agent" is one Claude API call with a specific job and specific tools.
+Each "agent" is one LLM call with a specific job and specific tools.
 Running them in parallel means you get the full report fast.
 
 ### Data sources (all live, fetched at query time)
@@ -230,10 +230,10 @@ The synthesis agent is instructed: *"Summarize the facts. Do not say buy or sell
 The decision is always yours.
 
 ### Models used
-- Claude Haiku — Fundamentals, Price, Peer agents (fast, structured data extraction)
-- Claude Sonnet — News agent, Risk agent (needs judgment)
-- Claude Sonnet — Synthesis agent (writes the final brief)
-- Claude Opus — Optional "deep dive" mode if user wants extended analysis
+- a fast, cheap model — Fundamentals, Price, Peer agents (fast, structured data extraction)
+- a stronger model — News agent, Risk agent (needs judgment)
+- a stronger model — Synthesis agent (writes the final brief)
+- a frontier model — Optional "deep dive" mode if user wants extended analysis
 
 ### When this gets built
 Last in the roadmap (after Chat Advisor is working).
@@ -246,20 +246,20 @@ with a supervisor is exactly the use case LangGraph was built for.
 
 | Layer | Feature | Trigger | Output | Model |
 |---|---|---|---|---|
-| 1 | Auto-Categorize | Add any transaction | Category tag | Haiku |
-| 2 | NL Input | Type a sentence | Parsed transaction (confirm first) | Sonnet |
-| 3 | Smart Insights | Monthly / on demand | Written financial analysis of your data | Sonnet |
-| 4 | Chat Advisor | Ask a question | Answer from your real data | Sonnet |
-| 5 | Deep Research | "Research HDFC Bank" | One-pager on any stock/MF/ETF/crypto | Haiku + Sonnet + Opus |
+| 1 | Auto-Categorize | Add any transaction | Category tag | fast / cheap |
+| 2 | NL Input | Type a sentence | Parsed transaction (confirm first) | stronger |
+| 3 | Smart Insights | Monthly / on demand | Written financial analysis of your data | stronger |
+| 4 | Chat Advisor | Ask a question | Answer from your real data | stronger |
+| 5 | Deep Research | "Research HDFC Bank" | One-pager on any stock/MF/ETF/crypto | mixed (fast → stronger → frontier) |
 
 ## Cost per feature (rough estimate)
 
 | Feature | Per use | Notes |
 |---|---|---|
-| Auto-Categorize (Haiku) | ~₹0.002 | Near-zero after rules kick in |
-| NL Input (Sonnet) | ~₹0.05 | Per sentence parsed |
-| Insights (Sonnet + RAG) | ~₹0.50 | Per monthly report |
-| Chat (Sonnet, streaming) | ~₹0.10 | Per conversation turn |
+| Auto-Categorize (fast model) | ~₹0.002 | Near-zero after rules kick in |
+| NL Input (stronger model) | ~₹0.05 | Per sentence parsed |
+| Insights (stronger model + RAG) | ~₹0.50 | Per monthly report |
+| Chat (stronger model, streaming) | ~₹0.10 | Per conversation turn |
 | Deep Research (multi-agent) | ~₹2–5 | Per full research report |
 
-Prompt caching on system prompts + category lists cuts Layers 1–2 costs by ~80%.
+Rules-first routing keeps Layers 1–2 cheap — most entries never reach the model.
